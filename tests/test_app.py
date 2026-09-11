@@ -70,7 +70,7 @@ def test_truncating_history_would_break_classification(stichtag):
     """Begruendung dafuer, dass gerechnet immer auf der vollen Historie wird."""
     from fcst_manager.periods import Month, month_range
 
-    orders = {"2025_01": 10, "2025_06": 10, "2026_01": 10}
+    orders = {"2024_08": 10, "2025_01": 10, "2025_06": 10, "2026_01": 10}
     full = make_item(historie=orders)
     short_window = month_range(stichtag - DISPLAY_WINDOW_MONTHS, Month.parse("2026_06"))
     short = make_item(historie=orders, hist_window=short_window)

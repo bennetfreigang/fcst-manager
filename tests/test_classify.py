@@ -13,19 +13,30 @@ def test_no_order_at_all_is_sleeper(stichtag):
     assert "keine Bestellung" in reason
 
 
-def test_three_orders_with_three_years_of_data_is_high_runner(stichtag):
-    item = make_item(historie={"2025_01": 10, "2025_06": 10, "2026_01": 10})
+def test_four_orders_with_three_years_of_data_is_high_runner(stichtag):
+    item = make_item(historie={"2024_08": 10, "2025_01": 10, "2025_06": 10, "2026_01": 10})
     segment, reason, _ = classify(item, stichtag, CFG)
     assert segment is Segment.HIGH
     assert "Bestellungen/Quartal" in reason, "weiches Kriterium muss berichtet werden"
 
 
+def test_exactly_three_orders_is_mid_runner_not_high_runner(stichtag):
+    """Regression: Item 1847010008 (echte Kundendatei) hat n=3 bei 0.21 Bestellungen/
+    Quartal und wurde vom Kunden explizit als Mid Runner eingestuft - obwohl das
+    Diagramm woertlich '>=3 Bestellungen' fuer High Runner nennt. Die Schwelle
+    high_runner_min_orders wurde deshalb von 3 auf 4 angehoben."""
+    item = make_item(historie={"2023_01": 15, "2025_07": 10, "2026_03": 5})
+    segment, reason, _ = classify(item, stichtag, CFG)
+    assert segment is Segment.MID
+    assert "unter der High-Runner-Schwelle 4" in reason
+
+
 def test_quarterly_criterion_is_reported_but_not_enforced(stichtag):
     """Beide Referenz-Items liegen unter 1 Bestellung/Quartal, sind aber High Runner."""
-    item = make_item(historie={"2025_01": 10, "2025_06": 10, "2026_01": 10})
+    item = make_item(historie={"2024_08": 10, "2025_01": 10, "2025_06": 10, "2026_01": 10})
     segment, reason, assumptions = classify(item, stichtag, CFG)
     assert segment is Segment.HIGH
-    assert "0.21 Bestellungen/Quartal" in reason
+    assert "0.29 Bestellungen/Quartal" in reason
     assert any("nicht geprueft" in a for a in assumptions)
 
 

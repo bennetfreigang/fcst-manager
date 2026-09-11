@@ -90,7 +90,13 @@ class Config:
     horizon_months: int = 18
 
     # Klassifizierung
-    high_runner_min_orders: int = 3
+    high_runner_min_orders: int = 4
+    """Bisher 3 (woertlich aus dem Diagramm: '>=3 Bestellungen'). Auf 4 angehoben,
+    nachdem Item 1847010008 (n=3, 0.21 Bestellungen/Quartal) vom Kunden explizit als
+    Mid Runner eingestuft wurde, waehrend die beiden urspruenglich validierten
+    High-Runner-Referenzen bei n=6 (0.43/Quartal) bzw. n=8 (0.57/Quartal) liegen.
+    Trennt alle drei bekannten Referenzpunkte korrekt; mit nur diesen dreien bleibt
+    die exakte Grenze (4 vs. z.B. 5) unsicher - bei weiteren Grenzfaellen nachschaerfen."""
     high_runner_min_window_months: int = 36
     sleeper_max_orders: int = 1
     sleeper_min_age_months: int = 12
