@@ -53,8 +53,14 @@ def _load(raw: bytes, sheet: str | None):
     return layout, items, manual
 
 
-@st.cache_data(show_spinner="FCST wird gerechnet …")
 def _compute(raw: bytes, sheet: str | None, stichtag_label: str, cfg: Config):
+    """Bewusst UNGECACHT: forecast() ist reine Arithmetik ohne I/O (<1ms je Artikel,
+    siehe Benchmark im Commit) - der Rechenaufwand ist kein Grund zu cachen. Wichtiger:
+    st.cache_data hasht nur den Bytecode dieser Funktion selbst, nicht den von engine.py/
+    estimators.py - eine Aenderung an der Q/T/Anchor-Formel wuerde in einer laufenden
+    App-Session sonst STILL einen veralteten Cache-Treffer liefern, obwohl der Code
+    laengst korrigiert ist (so beobachtet waehrend der Entwicklung: Q blieb nach einem
+    Formel-Fix in einer laufenden Session auf dem alten Wert stehen)."""
     _, items, _ = _load(raw, sheet)
     stichtag = Month.parse(stichtag_label)
     return {i.item_number: forecast(i, stichtag, cfg) for i in items}
