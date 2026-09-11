@@ -32,10 +32,28 @@ def test_meta_columns_are_resolved_including_dot_placeholders(reference_file):
 
 
 def test_reference_forecast_matches_manual_exactly(reference_file):
-    """Beide Kundenbeispiele muessen Monat fuer Monat reproduziert werden."""
+    """D228025-100 (Example.xlsx) muss Monat fuer Monat reproduziert werden - der
+    Anchor trifft hier zufaellig auch mit der aktuellen Stichtag+LT-Formel.
+
+    1/136648 (Example 2.xlsx) trifft NICHT mehr exakt: die Datei nennt Anchor
+    2027_03, die vom Kunden definitiv bestaetigte Formel (Stichtag+LT, siehe
+    engine.compute_anchor) ergibt 2027_01. Laut Kunde koennen die per Hand
+    erstellten Referenzwerte selbst fehlerhaft sein - Q und T (die von der
+    Anchor-Aenderung unberuehrt sind) muessen trotzdem weiter stimmen.
+    """
     layout, items, manual = read_items(reference_file)
     decision = forecast(items[0], layout.stichtag(), Config())
     verdict, diffs = compare_with_manual(decision, manual[items[0].item_number])
+
+    if items[0].item_number == "1/136648":
+        assert decision.qty == 150 and decision.interval == 3
+        assert "2027_03: manuell 150 / berechnet 0" in diffs, (
+            "bekannte, vom Kunden akzeptierte Abweichung zum Anchor - falls diese "
+            "Assertion bricht, hat sich entweder die Formel geaendert (dann Kommentar "
+            "und Test anpassen) oder die Referenzdatei wurde per Hand korrigiert"
+        )
+        return
+
     assert diffs == ""
     assert verdict.startswith("exakte Uebereinstimmung")
 

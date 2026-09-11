@@ -7,7 +7,7 @@ FCST-Wert herleiten laesst (Q, T, Anchor, Ast, Annahmen, Warnungen).
 from __future__ import annotations
 
 from .classify import classify
-from .estimators import cluster_events, compute_interval, compute_quantity, round_to_moq
+from .estimators import compute_interval, compute_quantity, round_to_moq
 from .model import Branch, Config, Decision, FcstPoint, Item, Segment
 from .periods import Month
 
@@ -59,42 +59,19 @@ def supply_gap(item: Item, stichtag: Month, cfg: Config):
 # ---------------------------------------------------------------------------
 
 
-def compute_anchor(
-    item: Item, stichtag: Month, interval: int, cfg: Config | None = None
-) -> tuple[Month, str]:
-    """Erster FCST-Termin = spaetester aller Kandidaten.
+def compute_anchor(item: Item, stichtag: Month) -> tuple[Month, str]:
+    """Erster FCST-Termin = Stichtag + LT.
 
-    Der Order-Kandidat setzt auf dem *Beginn* der letzten Order auf. Aufeinander-
-    folgende Order-Monate sind Split-Lieferungen derselben Bestellung und starten
-    keinen neuen Bestellzyklus - erst damit reproduzieren beide Referenz-Items
-    exakt. Ueber ``Config.anchor_on_order_cluster_start=False`` abschaltbar.
+    So vom Kunden definitiv bestaetigt (Order-Buch und Historie fliessen NICHT
+    mehr in den Anchor selbst ein - nur noch in Klassifizierung und
+    Lieferluecke). Eine fruehere Fassung nahm das Maximum aus Stichtag+LT,
+    letzter Order+T und letztem Verkauf+LT; das wich bei einem der beiden
+    Referenzitems (1/136648: 2027_03 statt 2027_01) von dieser einfachen Regel
+    ab. Laut Kunde koennen die frei erstellten Referenzwerte in den Beispiel-
+    dateien selbst fehlerhaft sein (Handarbeit) - Stichtag+LT gilt als die
+    verbindliche Formel.
     """
-    cfg = cfg or Config()
-    orders = item.order_events()
-    sales = item.sale_events()
-
-    candidates: list[tuple[Month, str]] = []
-    if orders:
-        if cfg.anchor_on_order_cluster_start:
-            group = cluster_events(orders, cfg.split_delivery_max_gap)[-1]
-            base, note = group[0], f"letzte Order {group[0]} + T={interval}"
-            if len(group) > 1:
-                note += (
-                    f" (Split-Lieferung {', '.join(m.label for m in group)} "
-                    "als eine Order gewertet)"
-                )
-        else:
-            base, note = orders[-1], f"letzter Order-Monat {orders[-1]} + T={interval}"
-        candidates.append((base + interval, note))
-    if sales:
-        candidates.append((sales[-1] + item.lt, f"letzter Verkauf {sales[-1]} + LT={item.lt}"))
-    candidates.append((stichtag + item.lt, f"Stichtag {stichtag} + LT={item.lt}"))
-
-    month, source = max(candidates, key=lambda c: c[0].index)
-    others = sorted({c[0].label for c in candidates if c[0] != month})
-    if others:
-        source += f"; spaeter als {', '.join(others)}"
-    return month, source
+    return stichtag + item.lt, f"Stichtag {stichtag} + LT={item.lt}"
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +216,7 @@ def forecast(item: Item, stichtag: Month, cfg: Config | None = None) -> Decision
         if qty is None or interval is None:
             decision.branch_reason = "Q oder T unbestimmbar -> kein FCST"
             return decision
-        anchor, anchor_source = compute_anchor(item, stichtag, interval, cfg)
+        anchor, anchor_source = compute_anchor(item, stichtag)
         decision.anchor, decision.anchor_source = anchor, anchor_source
         decision.branch_reason = (
             f"Backlog {', '.join(m.label for m in backlog)} und AVG Demand "
@@ -278,7 +255,7 @@ def forecast(item: Item, stichtag: Month, cfg: Config | None = None) -> Decision
             f"AVG Demand x T = {item.avg_demand:.4g} x {interval} = "
             f"{item.avg_demand * interval:.2f}, gerundet (keine MOQ bekannt)"
         )
-        anchor, anchor_source = compute_anchor(item, stichtag, interval, cfg)
+        anchor, anchor_source = compute_anchor(item, stichtag)
         if gap_date is not None and anchor < gap_date:
             anchor, anchor_source = gap_date, f"Ende der Lieferluecke {gap_date}"
         decision.anchor, decision.anchor_source = anchor, anchor_source
@@ -305,7 +282,7 @@ def forecast(item: Item, stichtag: Month, cfg: Config | None = None) -> Decision
         decision.branch_reason = f"kein FCST: {interval_source}"
         return decision
 
-    anchor, anchor_source = compute_anchor(item, stichtag, interval, cfg)
+    anchor, anchor_source = compute_anchor(item, stichtag)
     decision.anchor, decision.anchor_source = anchor, anchor_source
     decision.branch_reason = (
         f"kleine Lieferluecke ({gap_months} Monate ab Stichtag) -> Standard-Terminreihe "

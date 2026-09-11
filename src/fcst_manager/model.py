@@ -115,10 +115,6 @@ class Config:
     (z.B. winziger AVG Demand relativ zur Bestellmenge) - fachlich unerwuenscht,
     denn ein klassifizierter Runner sollte immer mindestens einen naechsten
     Bestelltermin zeigen. Real beobachtet an Item 1847010008 (T=33 Monate)."""
-    anchor_on_order_cluster_start: bool = True
-    """Split-Lieferungen im Orderbook als eine Order werten und den Anchor auf deren
-    ersten Monat setzen. An beiden Referenz-Items validiert; auf False faellt die
-    Engine auf 'letzter Order-Monat + T' zurueck (Verhalten der ersten Iteration)."""
 
 
 # ---------------------------------------------------------------------------

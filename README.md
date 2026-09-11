@@ -139,7 +139,7 @@ Warnung gemeldet statt still verschluckt.
 | Ast | Verhalten | Stand |
 |---|---|---|
 | Sleeper | kein FCST | aus Diagramm |
-| High Runner, kleine Lücke | Standard-FCST | **an 2 Referenzitems validiert (8/8 Monate)** |
+| High Runner, kleine Lücke | Standard-FCST | **Q/T an 2 Referenzitems validiert; Anchor = Stichtag+LT vom Kunden bestätigt** (siehe unten) |
 | High Runner, große Lücke | `Q = AVG Demand × T`, aufgerundet auf MOQ-Vielfaches; erster Termin nicht vor Lückenende | **Annahme** — keine Referenzdaten |
 | Mid Runner, kleine Lücke | Standard-FCST | **Annahme** — keine Referenzdaten |
 | Mid Runner, große Lücke | FCST nur bei offenem Backlog **und** bekanntem AVG Demand | **Annahme** — keine Referenzdaten |
@@ -150,20 +150,25 @@ stillschweigend Zahlen.
 
 ### Standard-FCST
 
-1. **Q** = historisch häufigste Menge, MOQ-Vielfache bevorzugt; Gleichstand → größere Menge.
+1. **Q** = historisch häufigste Menge, MOQ-Vielfache bevorzugt; Gleichstand →
+   die *zuletzt beobachtete* Menge (über Historie **und** Order — validiert an
+   Item `1847010008`: 15/10/5 kommen je 1× vor, korrekt ist die zuletzt
+   beobachtete 5, nicht die größte 15).
 2. **T** = `floor(Q / AVG Demand)`, mindestens 1. Fehlt AVG Demand, greift der Fallback (unten).
-3. **Anchor** = spätester Kandidat aus
-   * letzte Order **(Beginn der Order, Split-Lieferungen zusammengefasst)** + T
-   * letzter Verkauf + LT
-   * Stichtag + LT
+3. **Anchor = Stichtag + LT.** Sonst nichts — Order-Buch und Historie fließen
+   NICHT in den Anchor ein (nur in Klassifizierung und Lieferlücke). Vom Kunden
+   ausdrücklich bestätigt; eine frühere Fassung nahm das Maximum aus
+   Stichtag+LT, letzter Order+T und letztem Verkauf+LT — das wich bei
+   `1/136648` von dieser einfacheren Regel ab (siehe Offene Punkte).
 4. Weitere Termine: Anchor + n×T bis Horizont-Ende, jeweils Menge Q.
 5. Monate mit bereits bekannter Order werden übersprungen, nicht dupliziert.
 6. **Mindestens ein Termin wird immer gezeigt**, auch wenn der Anchor selbst hinter
-   dem Horizont-Ende liegt (z. B. bei sehr großem T durch winzigen AVG Demand relativ
-   zur Bestellmenge — real beobachtet an Item `1847010008`, T=33 Monate). Ohne diese
-   Garantie (`Config.guarantee_first_order`, Default an) wäre der FCST für einen
-   klassifizierten Runner komplett leer, obwohl es fachlich immer einen nächsten
-   fälligen Termin gibt. Weitere Wiederholungen bleiben weiterhin am Horizont gekappt.
+   dem Horizont-Ende liegt (z. B. bei großem T relativ zum Horizont — siehe
+   `HIGHGAP-006` in der Sammeldatei: Anchor 1 Monat nach Horizont-Ende, trotzdem
+   angezeigt). Ohne diese Garantie (`Config.guarantee_first_order`, Default an)
+   wäre der FCST für einen klassifizierten Runner komplett leer, obwohl es
+   fachlich immer einen nächsten fälligen Termin gibt. Weitere Wiederholungen
+   bleiben weiterhin am Horizont gekappt.
 
 ## T-Fallback ohne AVG Demand
 
@@ -193,15 +198,15 @@ Demand, Anchor, je Termin einer Begründung sowie Annahmen und Warnungen.
 
 ```
 Item 1/136648   (Stichtag 2026_08)
-  Klassifizierung : High Runner  -  8 Bestellungen (>= 3) bei 42 Monaten Datenbasis (>= 36); 0.57 Bestellungen/Quartal
+  Klassifizierung : High Runner  -  8 Bestellungen (>= 4) bei 42 Monaten Datenbasis (>= 36); 0.57 Bestellungen/Quartal
   Lieferluecke    : 2027_05 (= letzte Bindung + LT), +9 Monate ab Stichtag -> klein
   Ast             : High Runner, kleine Luecke -> Standard-FCST
-  Menge Q         : 150  (haeufigste Menge unter den MOQ-Vielfachen (5x in der Historie, MOQ=50))
+  Menge Q         : 150  (haeufigste Menge unter den MOQ-Vielfachen (5x in der Historie), MOQ=50)
   Intervall T     : 3 Monate  (floor(Q/AvgDemand) = floor(150/37.86))
-  Erster Termin   : 2027_03  (letzte Order 2026_12 + T=3; spaeter als 2027_01)
+  Erster Termin   : 2027_01  (Stichtag 2026_08 + LT=5)
   FCST:
-    2027_03         150   Anchor (Menge aus Historie)
-    2027_06         150   Anchor + 1xT = 2027_03 + 1x3 (Menge aus Historie)
+    2027_01         150   Anchor (Menge aus Historie)
+    2027_04         150   Anchor + 1xT = 2027_01 + 1x3 (Menge aus Historie)
 ```
 
 Die Export-Excel enthält zusätzlich das Blatt **FCST-Report** mit einer Zeile je
@@ -226,7 +231,13 @@ Warnungen, Vergleich mit einem vorhandenen manuellen FCST).
 5. **Lieferlücke in der Vergangenheit** gilt nach der Regel „mehr als 12 Monate ab
    Stichtag“ als *kleine* Lücke, obwohl der Artikel faktisch ungedeckt ist. Die
    Engine warnt, ändert die Regel aber nicht.
-6. **`floor()` bei T** ist instabil, wenn `Q/Demand` knapp unter einer ganzen Zahl
+6. **Referenzdateien selbst können fehlerhaft sein** — vom Kunden ausdrücklich
+   bestätigt (`Example.xlsx`/`Example 2.xlsx` sind per Hand erstellt). Bei
+   `1/136648` weicht die Datei-Referenz (Anchor `2027_03`) von der bestätigten
+   Formel `Stichtag+LT` (`2027_01`) ab; laut Kunde gilt die Formel, nicht die
+   Datei. `validate.py` prüft deshalb nur noch Q/T als Gate, der Monatsabgleich
+   ist informativ (siehe `KNOWN_ANCHOR_MISMATCH` dort).
+7. **`floor()` bei T** ist instabil, wenn `Q/Demand` knapp unter einer ganzen Zahl
    liegt: bei `1/136648` ist `150/37,861 = 3,962` → T=3. Schon 1,8 % Abweichung im
    Demand kippt das Ergebnis auf 4.
 

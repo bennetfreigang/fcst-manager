@@ -33,33 +33,35 @@ def test_reference_item_without_demand_is_reproduced_exactly(stichtag):
 
 
 def test_reference_item_with_demand_is_reproduced_exactly(stichtag):
+    """Q und T stimmen weiter mit der Referenzdatei ueberein; der Anchor nicht mehr -
+    die Datei nennt 2027_03, die vom Kunden bestaetigte Formel (Stichtag+LT, siehe
+    compute_anchor) ergibt 2027_01. Laut Kunde koennen die per Hand erstellten
+    Referenzwerte selbst fehlerhaft sein; Stichtag+LT gilt als verbindlich."""
     d = forecast(make_item(**REF_2), stichtag, CFG)
-    assert (d.qty, d.interval, d.anchor.label) == (150, 3, "2027_03")
-    assert d.as_series() == {"2027_03": 150, "2027_06": 150, "2027_09": 150, "2027_12": 150}
+    assert (d.qty, d.interval, d.anchor.label) == (150, 3, "2027_01")
+    assert d.as_series() == {
+        "2027_01": 150, "2027_04": 150, "2027_07": 150, "2027_10": 150, "2028_01": 150,
+    }
 
 
 # --- Anchor ---------------------------------------------------------------
 
 
-def test_anchor_treats_consecutive_orders_as_one_split_delivery(stichtag):
-    """Ohne Cluster-Logik landet der Anchor auf 2027_02 statt der Referenz 2027_01."""
-    item = make_item(**REF_1)
-    clustered, note = compute_anchor(item, stichtag, 4, CFG)
-    plain, _ = compute_anchor(item, stichtag, 4, Config(anchor_on_order_cluster_start=False))
-    assert clustered.label == "2027_01" and plain.label == "2027_02"
-    assert "Split-Lieferung" in note
+def test_anchor_is_exactly_stichtag_plus_lead_time(stichtag):
+    """Verbindliche Formel (vom Kunden explizit bestaetigt, siehe compute_anchor-
+    Docstring): Anchor = Stichtag + LT, ohne jeden Bezug zu Order oder Historie."""
+    anchor, source = compute_anchor(make_item(**REF_2), stichtag)
+    assert anchor == stichtag + 5 == Month.parse("2027_01")
+    assert source == f"Stichtag {stichtag} + LT=5"
 
 
-def test_anchor_never_precedes_stichtag_plus_lead_time(stichtag):
-    item = make_item(historie={"2024_05": 10, "2024_09": 10, "2025_02": 10}, lt=7)
-    anchor, source = compute_anchor(item, stichtag, 3, CFG)
-    assert anchor == stichtag + 7
-    assert "Stichtag" in source
-
-
-def test_anchor_uses_latest_order_cluster_when_it_is_later(stichtag):
-    anchor, source = compute_anchor(make_item(**REF_2), stichtag, 3, CFG)
-    assert anchor.label == "2027_03" and "letzte Order" in source
+def test_anchor_ignores_order_and_historie_entirely(stichtag):
+    """Regression fuer die alte (verworfene) Order/Cluster-Logik: zwei Items mit
+    identischem Stichtag+LT muessen denselben Anchor haben, egal wie Order und
+    Historie aussehen."""
+    lean = make_item(lt=6, historie={}, order={})
+    busy = make_item(lt=6, historie={"2024_02": 200, "2025_11": 40}, order={"2026_09": 999})
+    assert compute_anchor(lean, stichtag)[0] == compute_anchor(busy, stichtag)[0] == stichtag + 6
 
 
 # --- Lieferluecke ---------------------------------------------------------
@@ -155,15 +157,17 @@ def test_mid_runner_small_gap_is_flagged_as_unvalidated_assumption(stichtag):
 
 
 def test_months_with_known_order_are_not_duplicated(stichtag):
-    """Bei T=1 laeuft die Terminreihe in eine dreimonatige Split-Lieferung hinein."""
-    item = make_item(avg_demand=60, lt=0,
+    """Anchor (Stichtag+LT=2026_09) faellt in ein dreimonatiges Orderbook-Fenster;
+    bei T=1 muss die Terminreihe durch alle drei bereits bekannten Monate laufen,
+    bevor der erste echte FCST-Punkt entsteht."""
+    item = make_item(avg_demand=60, lt=1,
                      historie={"2025_01": 60, "2025_07": 60, "2026_01": 60},
                      order={"2026_09": 60, "2026_10": 60, "2026_11": 60})
     d = forecast(item, stichtag, CFG)
-    assert d.interval == 1 and d.anchor.label == "2026_10"
-    assert [m.label for m in d.skipped_months] == ["2026_10", "2026_11"]
+    assert d.interval == 1 and d.anchor.label == "2026_09"
+    assert [m.label for m in d.skipped_months] == ["2026_09", "2026_10", "2026_11"]
     series = d.as_series()
-    assert "2026_10" not in series and "2026_11" not in series
+    assert not ({"2026_09", "2026_10", "2026_11"} & series.keys())
     assert series["2026_12"] == 60
 
 
@@ -196,15 +200,15 @@ def test_guarantee_first_order_can_be_disabled(stichtag):
     assert d.warnings == [], "ohne Garantie gibt es (wie zuvor) still keinen FCST-Eintrag"
 
 
-def test_guarantee_first_order_skips_a_split_delivery_month_already_covered(stichtag):
-    """Faellt der Anchor (= erster Monat des letzten Order-Clusters + T) auf einen
-    zweiten, bereits per Split-Lieferung bekannten Order-Monat im selben Cluster,
-    muss die Garantie zum naechsten freien Monat weitersuchen."""
-    item = make_item(avg_demand=50, lt=0, historie={"2024_02": 50},
+def test_guarantee_first_order_skips_months_already_covered_by_orders(stichtag):
+    """Faellt der Anchor (Stichtag+LT) in ein mehrmonatiges Orderbook-Fenster, muss
+    die Terminreihe erst durch die bereits bekannten Monate laufen, bevor der
+    erste echte FCST-Punkt entsteht."""
+    item = make_item(avg_demand=50, lt=1, historie={"2024_02": 50},
                      order={"2026_09": 50, "2026_10": 50})
     d = forecast(item, stichtag, CFG)
-    assert d.interval == 1 and d.anchor == Month.parse("2026_10")
-    assert Month.parse("2026_10") in d.skipped_months
+    assert d.interval == 1 and d.anchor == Month.parse("2026_09")
+    assert d.skipped_months == [Month.parse("2026_09"), Month.parse("2026_10")]
     assert d.fcst[0].month == Month.parse("2026_11")
 
 
@@ -238,7 +242,7 @@ def test_every_forecast_point_carries_a_reason(stichtag):
 def test_explain_covers_the_full_derivation(stichtag):
     text = forecast(make_item(**REF_2), stichtag, CFG).explain()
     for fragment in ("Klassifizierung", "Lieferluecke", "Menge Q", "Intervall T",
-                     "Erster Termin", "2027_03"):
+                     "Erster Termin", "2027_01"):
         assert fragment in text
 
 
