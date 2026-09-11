@@ -55,8 +55,16 @@ def _gaps(events: list[Month]) -> list[int]:
 def compute_quantity(item: Item, cfg: Config) -> tuple[float | None, str, list[str]]:
     """Q = historisch haeufigste Menge, MOQ-Vielfache bevorzugt.
 
-    Gleichstand wird zur *groesseren* Menge aufgeloest - so validiert an
-    D228025-100 (20 und 40 je 3x, Kunde rechnet mit 40).
+    Gleichstand wird zur *zuletzt beobachteten* Menge aufgeloest (ueber Historie
+    UND Order, wie auch sonst im Engine "letzte Bindung" vor reiner Historie
+    zaehlt). Frueher wurde bei Gleichstand die *groessere* Menge gewaehlt - das
+    war nur an D228025-100 validiert, wo 20 und 40 je 3x vorkommen und 40 auch
+    zufaellig die zuletzt beobachtete Menge ist (Order 2026_10). Bei Item
+    1847010008 (jede Menge 15/10/5 kommt genau 1x vor - ein reiner Gleichstand
+    ohne echtes Muster) waehlte "groesser" faelschlich 15 statt der vom Kunden
+    bestaetigten 5 (= letzte Order 2026_09, = letzte Historie 2026_03). Recency
+    trifft beide Faelle richtig; "groesser" bleibt nur als letzter Tiebreak fuer
+    den (praktisch unmoeglichen) Fall, dass sogar der letzte Monat gleich ist.
     """
     warnings: list[str] = []
     negatives = {m.label: q for m, q in item.historie.items() if q is not None and q < 0}
@@ -70,26 +78,44 @@ def compute_quantity(item: Item, cfg: Config) -> tuple[float | None, str, list[s
         return None, "keine Historie und kein MOQ -> Q unbestimmbar", warnings
 
     counts = Counter(quantities)
+    last_seen = _last_seen_months(item)
+
+    def pick(candidates: dict[float, int]) -> float:
+        return max(candidates, key=lambda q: (candidates[q], last_seen.get(q), q))
+
+    def describe(best: float, candidates: dict[float, int], scope: str) -> str:
+        tie = [q for q, c in candidates.items() if c == candidates[best]]
+        src = f"haeufigste Menge{scope} ({candidates[best]}x in der Historie)"
+        if len(tie) > 1:
+            src += (
+                f"; Gleichstand mit {sorted(q for q in tie if q != best)} -> "
+                f"zuletzt beobachtete Menge gewaehlt ({last_seen[best]})"
+            )
+        return src
+
     if item.moq and item.moq > 0:
         multiples = {q: c for q, c in counts.items() if _is_moq_multiple(q, item.moq)}
         if multiples:
-            best = max(multiples, key=lambda q: (multiples[q], q))
-            src = (
-                f"haeufigste Menge unter den MOQ-Vielfachen ({multiples[best]}x in der Historie, "
-                f"MOQ={item.moq:g})"
-            )
+            best = pick(multiples)
+            src = describe(best, multiples, " unter den MOQ-Vielfachen") + f", MOQ={item.moq:g}"
             return float(best), src, warnings
         warnings.append(
             f"keine Historie-Menge ist ein Vielfaches der MOQ {item.moq:g} - "
             "MOQ-Praeferenz uebersprungen"
         )
 
-    best = max(counts, key=lambda q: (counts[q], q))
-    tie = [q for q, c in counts.items() if c == counts[best]]
-    src = f"haeufigste Menge ({counts[best]}x in der Historie)"
-    if len(tie) > 1:
-        src += f"; Gleichstand mit {sorted(q for q in tie if q != best)} -> groessere Menge gewaehlt"
-    return float(best), src, warnings
+    best = pick(counts)
+    return float(best), describe(best, counts, ""), warnings
+
+
+def _last_seen_months(item: Item) -> dict[float, Month]:
+    """Je Menge der spaeteste Monat, in dem sie in Historie ODER Order auftaucht."""
+    last: dict[float, Month] = {}
+    for source in (item.historie, item.order):
+        for month, qty in source.items():
+            if qty and qty > 0 and (qty not in last or month > last[qty]):
+                last[qty] = month
+    return last
 
 
 def round_to_moq(qty: float, moq: float | None) -> float:
