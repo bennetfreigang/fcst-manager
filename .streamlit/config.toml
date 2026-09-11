@@ -1,0 +1,7 @@
+[browser]
+gatherUsageStats = false
+
+[server]
+# Excel-Dateien mit voller Historie sind klein (< 100 KB); der Default (200 MB)
+# passt, wird hier nur dokumentiert falls spaeter groessere Dateien vorkommen.
+maxUploadSize = 200

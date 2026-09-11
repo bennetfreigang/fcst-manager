@@ -46,6 +46,42 @@ Damit die Kurzsicht nicht in die Irre führt:
   liegen („Nur 4 von 6 Bestellungen liegen in den letzten 18 Monaten“) — also genau bei den
   Artikeln, für die sich die gesamte Historie lohnt
 
+## Deployment (Streamlit Community Cloud)
+
+1. Code nach GitHub pushen (Repo ist privat — Streamlit Community Cloud kann trotzdem
+   daraus deployen, siehe Hinweis unten).
+2. Auf [share.streamlit.io](https://share.streamlit.io) mit dem GitHub-Account anmelden
+   und dem Streamlit-GitHub-App Zugriff auf `fcst-manager` gewaehren (nur bei privaten
+   Repos noetig).
+3. „New app“ → Repo `bennetfreigang/fcst-manager`, Branch `main`,
+   **Main file path**: `src/fcst_manager/app.py`.
+4. Python-Version wird aus [`.python-version`](.python-version) uebernommen (3.12).
+5. Deploy klicken. Build installiert [`requirements.txt`](requirements.txt) — die Zeile
+   `-e .` installiert das eigene Paket editable, damit `import fcst_manager` ohne
+   Aenderungen am Code funktioniert.
+
+`requirements.txt` ist aus dem Lockfile generiert und muss nach Aenderungen an den
+Abhaengigkeiten neu erzeugt werden:
+
+```bash
+uv export --extra app --no-dev --no-emit-project --format requirements-txt -o requirements.txt
+```
+
+(Die Zeile `-e .` am Dateianfang danach nicht ueberschreiben — `uv export` fuegt sie
+nicht automatisch ein.)
+
+### Wichtig bei echten Vertragsdaten
+
+Streamlit Community Cloud ist ein Drittanbieter-Dienst: hochgeladene Dateien werden
+nicht dauerhaft gespeichert, laufen aber durch dessen Infrastruktur (USA). Zusaetzlich
+ist die App-URL frei aufrufbar — jede:r mit dem Link kann eigene Dateien hochladen und
+rechnen lassen; es gibt keinen Zugriffsschutz auf dem kostenlosen Tier (dafuer gibt es
+den kostenpflichtigen „Community Cloud for Teams“-Tarif mit E-Mail-/SSO-Beschraenkung).
+Fuer produktive Nutzung mit echten ÖBB-Vertragsdaten sollte das gegen die eigenen
+Datenschutzanforderungen abgeglichen werden — Alternative: Docker-Image self-hosted
+betreiben (siehe [`docs/archiv`](docs/archiv) fuer die verworfene Historie, ein
+Dockerfile ist aktuell nicht Teil des Repos, auf Wunsch nachreichbar).
+
 ## Verwendung (CLI)
 
 Ganze Datei rechnen und als neue Excel exportieren:

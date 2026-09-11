@@ -17,6 +17,7 @@ fcst-manager = "fcst_manager:main"
 [project.optional-dependencies]
 app = [
     "streamlit>=1.63.0",
+    "pandas>=2.0",
 ]
 
 [build-system]
