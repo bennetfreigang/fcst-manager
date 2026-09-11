@@ -93,11 +93,42 @@ def test_overview_frame_has_one_row_per_item_and_both_order_counts(computed):
 
 
 def test_fcst_matrix_matches_the_decisions(computed):
-    layout, items, _, decisions, _ = computed
-    matrix = _fcst_matrix(layout, items, decisions)
-    assert list(matrix.columns) == [m.label for m in layout.fcst_months]
+    layout, items, _, decisions, stichtag = computed
+    cfg = Config(horizon_months=len(layout.fcst))
+    matrix = _fcst_matrix(items, decisions, stichtag, cfg)
+    # Alle Datei-eigenen FCST-Spalten muessen enthalten sein; zusaetzliche Spalten
+    # sind moeglich, wenn die 'mindestens ein Termin'-Garantie darueber hinausgreift
+    # (siehe test_fcst_matrix_shows_termine_beyond_the_horizon_from_the_order_guarantee).
+    assert set(m.label for m in layout.fcst_months) <= set(matrix.columns)
+    assert list(matrix.columns) == sorted(matrix.columns)
     assert matrix.loc["1/136648", "2027_03"] == 150
     assert matrix.loc["SLEEP-001"].isna().all()
+
+
+def test_fcst_matrix_extends_columns_beyond_a_larger_configured_horizon(computed):
+    """Regression: die Matrix zeigte bisher immer nur die 18 festen FCST-Spalten
+    der Eingabedatei, unabhaengig vom Horizont-Regler - ein groesserer Horizont
+    aenderte sichtbar nichts, obwohl die Berechnung dahinter korrekt lief."""
+    layout, items, _, _, stichtag = computed
+    cfg = Config(horizon_months=36)
+    decisions = {i.item_number: forecast(i, stichtag, cfg) for i in items}
+    matrix = _fcst_matrix(items, decisions, stichtag, cfg)
+    assert matrix.columns[-1] == (stichtag + 35).label
+    assert len(matrix.columns) > len(layout.fcst)
+
+
+def test_fcst_matrix_shows_termine_beyond_the_horizon_from_the_order_guarantee(computed):
+    """Ein per 'mindestens ein Termin'-Garantie ueber den Horizont hinaus gezeigter
+    FCST-Punkt (siehe Config.guarantee_first_order) darf in der Matrix nicht
+    verschwinden, nur weil er ausserhalb der Horizont-Spalten liegt."""
+    layout, items, _, _, stichtag = computed
+    cfg = Config(horizon_months=18)
+    decisions = {i.item_number: forecast(i, stichtag, cfg) for i in items}
+    beyond = [d for d in decisions.values() if d.fcst and d.fcst[-1].month > stichtag + 17]
+    assert beyond, "Testvoraussetzung: mindestens ein Item mit Termin ueber den Horizont hinaus"
+    matrix = _fcst_matrix(items, decisions, stichtag, cfg)
+    for d in beyond:
+        assert d.fcst[-1].month.label in matrix.columns
 
 
 # --- Kompletter Upload-Pfad ----------------------------------------------

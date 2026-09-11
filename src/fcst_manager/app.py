@@ -28,7 +28,7 @@ from fcst_manager.model import (
     IntervalMethod,
     Item,
 )
-from fcst_manager.periods import Month
+from fcst_manager.periods import Month, month_range
 
 DISPLAY_WINDOW_MONTHS = 18
 
@@ -97,13 +97,23 @@ def _overview_frame(items, decisions, stichtag) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _fcst_matrix(layout, items, decisions) -> pd.DataFrame:
-    months = [m.label for m in layout.fcst_months]
+def _fcst_matrix(items, decisions, stichtag: Month, cfg: Config) -> pd.DataFrame:
+    """Spalten = konfigurierter Horizont, erweitert um alle tatsaechlich berechneten
+    FCST-Monate. Ohne die Erweiterung wuerden Termine verschwinden, die die
+    'mindestens ein Termin'-Garantie ueber den Horizont hinaus zeigt (siehe
+    Config.guarantee_first_order) - die Datei-eigenen FCST-Spalten allein reichen
+    nicht, sobald der Horizont-Regler ueber deren feste Breite hinausgestellt wird.
+    """
+    horizon_end = stichtag + (cfg.horizon_months - 1)
+    months = set(month_range(stichtag, horizon_end))
+    for decision in decisions.values():
+        months.update(p.month for p in decision.fcst)
+    ordered = [m.label for m in sorted(months)]
     data = {
-        item.item_number: [decisions[item.item_number].as_series().get(m) for m in months]
+        item.item_number: [decisions[item.item_number].as_series().get(m) for m in ordered]
         for item in items
     }
-    return pd.DataFrame(data, index=months).T
+    return pd.DataFrame(data, index=ordered).T
 
 
 def _derivation_rows(item: Item, decision: Decision, stichtag: Month) -> list[dict[str, object]]:
@@ -307,8 +317,13 @@ def main() -> None:
 
     with tab_matrix:
         st.subheader(f"FCST je Artikel und Monat ({cfg.horizon_months} Monate ab {stichtag})")
-        st.dataframe(_fcst_matrix(layout, items, decisions), width="stretch", height=460)
-        st.caption("Leere Zellen = kein FCST-Termin. Monate mit bereits bekannter Order werden nicht doppelt belegt.")
+        st.dataframe(_fcst_matrix(items, decisions, stichtag, cfg), width="stretch", height=460)
+        st.caption(
+            "Leere Zellen = kein FCST-Termin. Monate mit bereits bekannter Order werden nicht "
+            "doppelt belegt. Spalten reichen ueber den Horizont hinaus, wenn die "
+            "'mindestens ein Termin'-Garantie einen spaeteren Termin zeigt (siehe Warnungen "
+            "im Artikel-Detail)."
+        )
 
     with tab_detail:
         numbers = [i.item_number for i in items]
