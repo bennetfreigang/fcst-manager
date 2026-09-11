@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import IO, TypeAlias
 
 import openpyxl
 from openpyxl.styles import Font
@@ -17,6 +18,9 @@ from openpyxl.utils import get_column_letter
 
 from .model import Decision, Item, clean_number
 from .periods import Month
+
+Source: TypeAlias = "str | Path | IO[bytes]"
+"""Pfad oder offener Byte-Stream - letzteres fuer Uploads (Streamlit)."""
 
 SECTION_ROW = 1
 HEADER_ROW = 2
@@ -82,7 +86,7 @@ class Layout:
         return self.fcst_months[0]
 
 
-def read_layout(path: str | Path, sheet: str | None = None) -> tuple[Layout, openpyxl.Workbook]:
+def read_layout(path: Source, sheet: str | None = None) -> tuple[Layout, openpyxl.Workbook]:
     wb = openpyxl.load_workbook(path, data_only=True)
     ws = wb[sheet] if sheet else wb.worksheets[0]
 
@@ -140,7 +144,7 @@ def _read_series(ws, row: int, cols: dict[Month, int], label: str) -> tuple[dict
     return series, warnings
 
 
-def read_items(path: str | Path, sheet: str | None = None):
+def read_items(path: Source, sheet: str | None = None):
     """Liest alle Artikelzeilen. Liefert (Layout, Items, manuelle FCST-Werte je Item)."""
     layout, wb = read_layout(path, sheet)
     ws = wb[layout.sheet_name]
@@ -258,8 +262,8 @@ REPORT_COLUMNS = [
 
 
 def write_output(
-    source: str | Path,
-    target: str | Path,
+    source: Source,
+    target: Source,
     layout: Layout,
     items: list[Item],
     decisions: dict[str, Decision],

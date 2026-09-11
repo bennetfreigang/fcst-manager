@@ -11,7 +11,42 @@ jedes einzelnen Werts.
 uv sync
 ```
 
-## Verwendung
+Streamlit steckt in der Dev-Gruppe und ist damit sofort dabei. Für eine Installation
+ohne Dev-Abhängigkeiten: `uv sync --no-dev --extra app`. Ganz ohne Streamlit laufen
+CLI und Engine weiterhin; die App-Tests überspringen sich dann selbst.
+
+## Oberfläche (Streamlit)
+
+```bash
+uv run streamlit run src/fcst_manager/app.py
+```
+
+Excel hochladen (Aufbau wie die Beispieldateien) — die App klassifiziert jede Zeile,
+rechnet den FCST und zeigt ihn in vier Reitern:
+
+| Reiter | Inhalt |
+|---|---|
+| **Übersicht** | Kennzahlen, Verteilung auf die Äste, Tabelle aller Artikel, Vergleich mit einem vorhandenen manuellen FCST |
+| **FCST-Matrix** | Artikel × Monat |
+| **Artikel-Detail** | Verlaufsdiagramm (Historie / Order / FCST), Herleitung Schritt für Schritt, Annahmen und Warnungen |
+| **Export** | Excel mit befüllten FCST-Spalten und Report-Blatt, dazu das Audit-Log |
+
+### 18-Monats-Sicht
+
+Die Umschaltung **„Letzte 18 Monate“ / „Gesamte Historie“** in der Seitenleiste betrifft
+ausschließlich die *Anzeige*. **Gerechnet wird immer auf der gesamten Historie** — eine
+Kürzung würde das High-Runner-Kriterium (mindestens 36 Monate Datenbasis) aushebeln und
+jeden Artikel zum Mid Runner machen (abgesichert durch
+`test_truncating_history_would_break_classification`).
+
+Damit die Kurzsicht nicht in die Irre führt:
+
+* die Übersicht zeigt **beide** Bestellzahlen nebeneinander — „letzte 18 Monate“ und „gesamt“
+* im Artikel-Detail erscheint ein Hinweis, sobald Bestellungen außerhalb des Fensters
+  liegen („Nur 4 von 6 Bestellungen liegen in den letzten 18 Monaten“) — also genau bei den
+  Artikeln, für die sich die gesamte Historie lohnt
+
+## Verwendung (CLI)
 
 Ganze Datei rechnen und als neue Excel exportieren:
 
@@ -41,11 +76,11 @@ uv run python -m fcst_manager.validate
 
 | Schalter | Bedeutung |
 |---|---|
-| `--stichtag JJJJ_MM` | „Aktueller Zeitpunkt" explizit setzen |
+| `--stichtag JJJJ_MM` | „Aktueller Zeitpunkt“ explizit setzen |
 | `--stichtag-heute` | laufenden Kalendermonat verwenden statt der ersten FCST-Spalte |
 | `--horizon N` | FCST-Horizont (Default: Breite des FCST-Abschnitts, sonst 18) |
 | `--t-method` | T-Schätzer ohne AVG Demand (siehe unten) |
-| `--large-gap-months N` | Schwelle „große Lieferlücke" (Default 12) |
+| `--large-gap-months N` | Schwelle „große Lieferlücke“ (Default 12) |
 | `--log DATEI` | Audit-Log mit der Herleitung jedes Artikels |
 
 ## Eingabeformat
@@ -58,7 +93,7 @@ Ein Arbeitsblatt, eine Zeile je Artikel:
 
 Metaspalten: `ItemNumber`, `AVG Demand ÖBB [mon]`, `MOQ Vertrag`, `LT [mon]`.
 Die Zuordnung ist tolerant (Groß-/Kleinschreibung, Zusätze wie `[mon]`).
-`"."`, leer und `"-"` bedeuten „unbekannt"; unlesbare Werte werden als
+`"."`, leer und `"-"` bedeuten „unbekannt“; unlesbare Werte werden als
 Warnung gemeldet statt still verschluckt.
 
 **Stichtag** = erste FCST-Spalte der Datei (so mit dem Kunden festgelegt).
@@ -74,7 +109,7 @@ Warnung gemeldet statt still verschluckt.
 | Mid Runner, große Lücke | FCST nur bei offenem Backlog **und** bekanntem AVG Demand | **Annahme** — keine Referenzdaten |
 
 Jede Annahme steht als Klartextsatz in `Decision.assumptions`, im Audit-Log und
-in der Spalte „Annahmen" des Report-Blatts. Kein nicht validierter Ast erzeugt
+in der Spalte „Annahmen“ des Report-Blatts. Kein nicht validierter Ast erzeugt
 stillschweigend Zahlen.
 
 ### Standard-FCST
@@ -133,21 +168,21 @@ Warnungen, Vergleich mit einem vorhandenen manuellen FCST).
 
 ## Offene Punkte für die Abstimmung mit dem Kunden
 
-1. **„3 Jahre Datenbasis"** ist als Breite des Historie-Fensters ausgelegt. Damit
+1. **„3 Jahre Datenbasis“** ist als Breite des Historie-Fensters ausgelegt. Damit
    ist das Kriterium für alle Zeilen einer Datei identisch und unterscheidet die
    Artikel nicht. Gemeint ist vermutlich etwas anderes — eine Auslegung als
-   „Artikel wird seit 3 Jahren verkauft" würde aber das validierte Referenzitem
+   „Artikel wird seit 3 Jahren verkauft“ würde aber das validierte Referenzitem
    `D228025-100` (erste Bestellung 2024_11) zum Mid Runner machen.
-2. **„≥1 Bestellung/Quartal"** wird nur berichtet, nicht geprüft — beide
+2. **„≥1 Bestellung/Quartal“** wird nur berichtet, nicht geprüft — beide
    Referenzitems liegen darunter (0,43 bzw. 0,57) und gelten dem Kunden dennoch
    als High Runner.
 3. **Sleeper-Abgrenzung**: umgesetzt als ≤1 Bestellung **und** kein AVG Demand
-   **und** letzte Bestellung älter als 12 Monate. „Kleine Bestellungen" aus dem
+   **und** letzte Bestellung älter als 12 Monate. „Kleine Bestellungen“ aus dem
    Diagramm ist nicht quantifizierbar und bleibt unberücksichtigt.
-4. **„Geringer Demand"** beim Mid Runner ist nicht quantifiziert und daher kein
+4. **„Geringer Demand“** beim Mid Runner ist nicht quantifiziert und daher kein
    eigenes Kriterium.
 5. **Lieferlücke in der Vergangenheit** gilt nach der Regel „mehr als 12 Monate ab
-   Stichtag" als *kleine* Lücke, obwohl der Artikel faktisch ungedeckt ist. Die
+   Stichtag“ als *kleine* Lücke, obwohl der Artikel faktisch ungedeckt ist. Die
    Engine warnt, ändert die Regel aber nicht.
 6. **`floor()` bei T** ist instabil, wenn `Q/Demand` knapp unter einer ganzen Zahl
    liegt: bei `1/136648` ist `150/37,861 = 3,962` → T=3. Schon 1,8 % Abweichung im
@@ -156,9 +191,12 @@ Warnungen, Vergleich mit einem vorhandenen manuellen FCST).
 ## Entwicklung
 
 ```bash
-uv run pytest                                  # 90 Tests
+uv run pytest                                  # 106 Tests
 uv run python tools/make_sample_workbook.py    # Sammeldatei mit Kantenfällen neu bauen
 ```
+
+Die App-Tests fahren den kompletten Upload-Pfad über Streamlits `AppTest` — inklusive
+Fehlerbehandlung für kaputte Dateien und unlesbare Stichtage.
 
 `docs/archiv/` enthält die erste Iteration der Engine und eine Zuordnungstabelle
 alt → neu.

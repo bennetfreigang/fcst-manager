@@ -5,7 +5,8 @@ import pytest
 from fcst_manager.model import Item
 from fcst_manager.periods import Month, month_range
 
-DATA = Path(__file__).resolve().parents[1] / "src" / "data"
+ROOT = Path(__file__).resolve().parents[1]
+DATA = ROOT / "src" / "data"
 STICHTAG = Month.parse("2026_08")
 
 # Fenster wie in den Referenzdateien: 42 Monate Historie, 14 Monate Order.

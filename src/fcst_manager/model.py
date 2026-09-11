@@ -130,6 +130,16 @@ class Branch(StrEnum):
     NO_FCST_DATA = "kein FCST (Datenlage unzureichend)"
 
 
+UNVALIDATED_BRANCHES = frozenset(
+    {Branch.HIGH_DEMAND_GAP, Branch.MID_STANDARD, Branch.MID_BACKLOG_DEMAND}
+)
+"""Aeste, fuer die es keine Kundenreferenz gibt - ihre Zahlen beruhen auf Annahmen.
+
+Nicht ueber ``Decision.assumptions`` bestimmbar: auch validierte Items tragen
+Klassifizierungs-Hinweise, die nichts ueber die Verlaesslichkeit des FCST sagen.
+"""
+
+
 @dataclass
 class FcstPoint:
     """Ein einzelner FCST-Wert samt Begruendung."""
