@@ -183,10 +183,10 @@ def _timeline_frame(item: Item, decision: Decision, stichtag: Month, full: bool)
 
 def main() -> None:
     st.set_page_config(
-        page_title="FCST — ÖBB Rahmenverträge", page_icon="📦", layout="wide"
+        page_title="FCST Rechner", page_icon="📦", layout="wide"
     )
 
-    st.title("📦 Forecast — ÖBB Rahmenverträge")
+    st.title("📦 Forecast Rechner")
 
     uploaded = st.file_uploader(
         "Excel-Datei hochladen",
