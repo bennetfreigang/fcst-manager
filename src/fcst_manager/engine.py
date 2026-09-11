@@ -110,29 +110,57 @@ def _emit_series(
     qty: float,
     horizon_end: Month,
     qty_note: str,
+    cfg: Config,
 ) -> None:
+    """Erzeugt die Terminreihe Anchor, Anchor+T, Anchor+2T, ... bis Horizont-Ende.
+
+    Bereits per Order belegte Monate werden uebersprungen (kein Duplikat). Ist
+    ``cfg.guarantee_first_order`` gesetzt (Default), wird der erste noch nicht
+    per Order belegte Termin immer aufgenommen - auch wenn er hinter dem
+    Horizont-Ende liegt. Ohne das waere ein klassifizierter Runner mit sehr
+    grossem T (z.B. winziger AVG Demand) komplett ohne FCST, obwohl es
+    fachlich immer einen naechsten faelligen Termin gibt.
+    """
     if interval < 1:
         raise ValueError(f"Intervall muss >= 1 sein, war {interval}")
 
-    if anchor > horizon_end:
-        decision.warnings.append(
-            f"erster Termin {anchor} liegt {anchor - horizon_end} Monate nach dem "
-            f"Horizont-Ende {horizon_end} -> kein FCST im Betrachtungszeitraum"
-        )
-        return
+    # Notbremse: verhindert eine Endlosschleife, falls das Orderbook aus
+    # irgendeinem Grund jeden Monat auf unbegrenzte Zeit belegt haelt.
+    safety_limit = anchor + max(cfg.max_interval_months * 10, 200)
 
     month, n = anchor, 0
-    while month <= horizon_end:
+    first_point_emitted = False
+    while month <= horizon_end or (cfg.guarantee_first_order and not first_point_emitted):
+        if month > safety_limit:
+            decision.warnings.append(
+                f"Suche nach dem ersten freien Termin ab Anchor {anchor} nach "
+                f"{safety_limit - anchor} Monaten abgebrochen (jeder Monat war per "
+                "Order belegt) - bitte Orderbook pruefen."
+            )
+            break
+
         existing = item.order.get(month) or 0
         if existing > 0:
             decision.skipped_months.append(month)
         else:
+            beyond_horizon = month > horizon_end
             reason = (
                 f"Anchor ({qty_note})"
                 if n == 0
                 else f"Anchor + {n}xT = {anchor} + {n}x{interval} ({qty_note})"
             )
+            if beyond_horizon:
+                reason += f"; liegt {month - horizon_end} Monate nach Horizont-Ende {horizon_end}"
             decision.fcst.append(FcstPoint(month=month, qty=qty, n=n, reason=reason))
+            first_point_emitted = True
+            if beyond_horizon:
+                decision.warnings.append(
+                    f"naechster faelliger Termin {month} liegt {month - horizon_end} Monate "
+                    f"nach dem Horizont-Ende {horizon_end} - dennoch angezeigt, damit "
+                    "mindestens ein Termin sichtbar ist; weitere Wiederholungen werden nicht "
+                    "mehr ergaenzt."
+                )
+                break
         month, n = month + interval, n + 1
 
 
@@ -217,7 +245,7 @@ def forecast(item: Item, stichtag: Month, cfg: Config | None = None) -> Decision
             f"Backlog {', '.join(m.label for m in backlog)} und AVG Demand "
             f"{item.avg_demand:.4g} vorhanden -> Standard-Terminreihe"
         )
-        _emit_series(item, decision, anchor, interval, qty, horizon_end, "Menge aus Historie")
+        _emit_series(item, decision, anchor, interval, qty, horizon_end, "Menge aus Historie", cfg)
         return decision
 
     # -- Ast 3: High Runner + grosse Luecke --------------------------------
@@ -257,7 +285,7 @@ def forecast(item: Item, stichtag: Month, cfg: Config | None = None) -> Decision
         decision.branch_reason = (
             f"grosse Lieferluecke ({gap_months} Monate ab Stichtag) -> Menge aus Demand"
         )
-        _emit_series(item, decision, anchor, interval, demand_qty, horizon_end, "Menge aus Demand")
+        _emit_series(item, decision, anchor, interval, demand_qty, horizon_end, "Menge aus Demand", cfg)
         return decision
 
     # -- Ast 4/5: kleine Luecke -> Standard-FCST ---------------------------
@@ -283,5 +311,5 @@ def forecast(item: Item, stichtag: Month, cfg: Config | None = None) -> Decision
         f"kleine Lieferluecke ({gap_months} Monate ab Stichtag) -> Standard-Terminreihe "
         f"Q={qty:g} alle {interval} Monate"
     )
-    _emit_series(item, decision, anchor, interval, qty, horizon_end, "Menge aus Historie")
+    _emit_series(item, decision, anchor, interval, qty, horizon_end, "Menge aus Historie", cfg)
     return decision

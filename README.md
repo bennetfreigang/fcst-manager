@@ -158,6 +158,12 @@ stillschweigend Zahlen.
    * Stichtag + LT
 4. Weitere Termine: Anchor + n×T bis Horizont-Ende, jeweils Menge Q.
 5. Monate mit bereits bekannter Order werden übersprungen, nicht dupliziert.
+6. **Mindestens ein Termin wird immer gezeigt**, auch wenn der Anchor selbst hinter
+   dem Horizont-Ende liegt (z. B. bei sehr großem T durch winzigen AVG Demand relativ
+   zur Bestellmenge — real beobachtet an Item `1847010008`, T=33 Monate). Ohne diese
+   Garantie (`Config.guarantee_first_order`, Default an) wäre der FCST für einen
+   klassifizierten Runner komplett leer, obwohl es fachlich immer einen nächsten
+   fälligen Termin gibt. Weitere Wiederholungen bleiben weiterhin am Horizont gekappt.
 
 ## T-Fallback ohne AVG Demand
 

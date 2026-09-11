@@ -102,6 +102,13 @@ class Config:
     interval_method: IntervalMethod = IntervalMethod.IMPLIED_DEMAND
     split_delivery_max_gap: int = 1     # Folgemonate innerhalb dieser Distanz = eine Order
     max_interval_months: int = 36       # Notbremse gegen absurd lange Intervalle
+    guarantee_first_order: bool = True
+    """Den naechsten faelligen Termin immer anzeigen, auch wenn er hinter dem
+    Horizont-Ende liegt (weitere Wiederholungen bleiben am Horizont gekappt).
+    Ohne dieses Flag verschwindet der FCST komplett, sobald T sehr gross wird
+    (z.B. winziger AVG Demand relativ zur Bestellmenge) - fachlich unerwuenscht,
+    denn ein klassifizierter Runner sollte immer mindestens einen naechsten
+    Bestelltermin zeigen. Real beobachtet an Item 1847010008 (T=33 Monate)."""
     anchor_on_order_cluster_start: bool = True
     """Split-Lieferungen im Orderbook als eine Order werten und den Anchor auf deren
     ersten Monat setzen. An beiden Referenz-Items validiert; auf False faellt die

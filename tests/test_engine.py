@@ -2,7 +2,7 @@ import pytest
 
 from fcst_manager.engine import compute_anchor, forecast, supply_gap
 from fcst_manager.model import Branch, Config, Segment
-from fcst_manager.periods import Month
+from fcst_manager.periods import Month, month_range
 
 from .conftest import make_item
 
@@ -172,13 +172,50 @@ def test_series_stays_inside_the_horizon(stichtag):
     assert all(p.month <= stichtag + 5 for p in d.fcst)
 
 
-def test_anchor_beyond_horizon_is_reported_not_silently_empty(stichtag):
+def test_anchor_beyond_horizon_is_still_shown_as_the_next_due_order(stichtag):
+    """Ein sehr grosses T (winziger Demand) darf den FCST nicht komplett leeren -
+    real beobachtet an Item 1847010008 (T=33, kein sichtbarer Termin mehr)."""
     item = make_item(avg_demand=25, moq=100, lt=30,
                      historie={"2024_02": 200, "2024_09": 200, "2025_04": 200},
                      order={"2027_05": 200})
     d = forecast(item, stichtag, CFG)
+    assert len(d.fcst) == 1, "genau der naechste faellige Termin, keine weiteren Wiederholungen"
+    assert d.fcst[0].month == d.anchor
+    assert "nach Horizont-Ende" in d.fcst[0].reason
+    assert any("dennoch angezeigt" in w for w in d.warnings)
+
+
+def test_guarantee_first_order_can_be_disabled(stichtag):
+    """Ueber Config abschaltbar - Verhalten der ersten Iteration bleibt erreichbar."""
+    item = make_item(avg_demand=25, moq=100, lt=30,
+                     historie={"2024_02": 200, "2024_09": 200, "2025_04": 200},
+                     order={"2027_05": 200})
+    cfg = Config(guarantee_first_order=False)
+    d = forecast(item, stichtag, cfg)
     assert d.fcst == []
-    assert any("nach dem Horizont-Ende" in w for w in d.warnings)
+    assert d.warnings == [], "ohne Garantie gibt es (wie zuvor) still keinen FCST-Eintrag"
+
+
+def test_guarantee_first_order_skips_a_split_delivery_month_already_covered(stichtag):
+    """Faellt der Anchor (= erster Monat des letzten Order-Clusters + T) auf einen
+    zweiten, bereits per Split-Lieferung bekannten Order-Monat im selben Cluster,
+    muss die Garantie zum naechsten freien Monat weitersuchen."""
+    item = make_item(avg_demand=50, lt=0, historie={"2024_02": 50},
+                     order={"2026_09": 50, "2026_10": 50})
+    d = forecast(item, stichtag, CFG)
+    assert d.interval == 1 and d.anchor == Month.parse("2026_10")
+    assert Month.parse("2026_10") in d.skipped_months
+    assert d.fcst[0].month == Month.parse("2026_11")
+
+
+def test_guarantee_first_order_has_a_safety_limit_against_endless_search(stichtag):
+    """Wenn das Orderbook jeden Kandidatenmonat weit ueber den Horizont hinaus belegt,
+    bricht die Suche irgendwann ab, statt endlos zu laufen."""
+    order = {m.label: 1 for m in month_range(stichtag, stichtag + 500)}
+    item = make_item(avg_demand=25, moq=100, lt=0, historie={"2024_02": 200}, order=order)
+    d = forecast(item, stichtag, CFG)
+    assert d.fcst == []
+    assert any("abgebrochen" in w for w in d.warnings)
 
 
 def test_lead_time_zero_with_single_order_terminates(stichtag):
