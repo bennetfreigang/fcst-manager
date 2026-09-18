@@ -103,7 +103,7 @@ def test_fcst_matrix_matches_the_decisions(computed):
     # (siehe test_fcst_matrix_shows_termine_beyond_the_horizon_from_the_order_guarantee).
     assert set(m.label for m in layout.fcst_months) <= set(matrix.columns)
     assert list(matrix.columns) == sorted(matrix.columns)
-    assert matrix.loc["1/136648", "2027_01"] == 150  # Anchor = Stichtag+LT, siehe engine.compute_anchor
+    assert matrix.loc["1/136648", "2027_05"] == 150  # Anchor = letzte OrderBook-Zeile+LT, siehe engine.compute_anchor
     assert matrix.loc["SLEEP-001"].isna().all()
 
 
@@ -245,10 +245,10 @@ def test_derivation_rows_cover_every_computed_quantity(computed):
     assert "6 in der gesamten Historie" in rows["Bestellungen"]
     assert "40" in rows["Menge Q"] and "Gleichstand" in rows["Menge Q"]
     assert "4 Monate" in rows["Intervall T"] and "impliziter Demand" in rows["Intervall T"]
-    assert "2027_01" in rows["Erster Termin"] and "Stichtag" in rows["Erster Termin"]
+    assert "2027_03" in rows["Erster Termin"] and "OrderBook" in rows["Erster Termin"]
 
     points = _fcst_points_frame(decisions["D228025-100"])
-    assert list(points["Monat"]) == ["2027_01", "2027_05", "2027_09", "2028_01"]
+    assert list(points["Monat"]) == ["2027_03", "2027_07", "2027_11"]
     assert points["Begründung"].str.len().min() > 0
 
 

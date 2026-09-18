@@ -26,42 +26,65 @@ REF_2 = dict(  # 1/136648
 
 
 def test_reference_item_without_demand_is_reproduced_exactly(stichtag):
+    """Q und T stimmen mit der Referenzdatei ueberein. Der Anchor ist seit der
+    Kundenvorgabe 'letzte OrderBook-Zeile + LT statt nur Stichtag+LT' (siehe
+    compute_anchor) 2027_03 = letzte Order 2026_10 + LT 5 - nicht mehr das
+    Datei-eigene 2027_01."""
     d = forecast(make_item(**REF_1), stichtag, CFG)
     assert d.segment is Segment.HIGH and d.branch is Branch.HIGH_STANDARD
-    assert (d.qty, d.interval, d.anchor.label) == (40, 4, "2027_01")
-    assert d.as_series() == {"2027_01": 40, "2027_05": 40, "2027_09": 40, "2028_01": 40}
+    assert (d.qty, d.interval, d.anchor.label) == (40, 4, "2027_03")
+    assert d.as_series() == {"2027_03": 40, "2027_07": 40, "2027_11": 40}
 
 
 def test_reference_item_with_demand_is_reproduced_exactly(stichtag):
-    """Q und T stimmen weiter mit der Referenzdatei ueberein; der Anchor nicht mehr -
-    die Datei nennt 2027_03, die vom Kunden bestaetigte Formel (Stichtag+LT, siehe
-    compute_anchor) ergibt 2027_01. Laut Kunde koennen die per Hand erstellten
-    Referenzwerte selbst fehlerhaft sein; Stichtag+LT gilt als verbindlich."""
+    """Q und T stimmen weiter mit der Referenzdatei ueberein. Der Anchor ist seit
+    der neuen OrderBook-Regel (siehe compute_anchor) 2027_05 = letzte OrderBook-
+    Zeile 2026_12 + LT 5 - weder die alte Stichtag+LT-Formel (2027_01) noch der
+    Datei-Wert (2027_03) treffen mehr exakt; das ist bekannt und akzeptiert (siehe
+    test_reference_forecast_matches_manual_exactly), massgeblich bleiben Q und T."""
     d = forecast(make_item(**REF_2), stichtag, CFG)
-    assert (d.qty, d.interval, d.anchor.label) == (150, 3, "2027_01")
-    assert d.as_series() == {
-        "2027_01": 150, "2027_04": 150, "2027_07": 150, "2027_10": 150, "2028_01": 150,
-    }
+    assert (d.qty, d.interval, d.anchor.label) == (150, 3, "2027_05")
+    assert d.as_series() == {"2027_05": 150, "2027_08": 150, "2027_11": 150}
 
 
 # --- Anchor ---------------------------------------------------------------
 
 
-def test_anchor_is_exactly_stichtag_plus_lead_time(stichtag):
-    """Verbindliche Formel (vom Kunden explizit bestaetigt, siehe compute_anchor-
-    Docstring): Anchor = Stichtag + LT, ohne jeden Bezug zu Order oder Historie."""
-    anchor, source = compute_anchor(make_item(**REF_2), stichtag)
+def test_anchor_falls_back_to_stichtag_plus_lead_time_without_future_orders(stichtag):
+    """Ohne eine Bestellung nach dem Stichtag zaehlt der Stichtag selbst ('heute') -
+    das bisherige Verhalten bleibt in diesem Fall unveraendert."""
+    item = make_item(lt=5, historie={"2024_01": 10}, order={})
+    anchor, source = compute_anchor(item, stichtag)
     assert anchor == stichtag + 5 == Month.parse("2027_01")
     assert source == f"Stichtag {stichtag} + LT=5"
 
 
-def test_anchor_ignores_order_and_historie_entirely(stichtag):
-    """Regression fuer die alte (verworfene) Order/Cluster-Logik: zwei Items mit
-    identischem Stichtag+LT muessen denselben Anchor haben, egal wie Order und
-    Historie aussehen."""
+def test_anchor_uses_the_last_future_orderbook_line_plus_lead_time(stichtag):
+    """Kundenvorgabe: liegt im OrderBook eine Bestellung NACH dem Stichtag, startet
+    der FCST erst LT Monate nach dieser letzten Bestellung, nicht schon nach
+    Stichtag+LT (ersetzt die fruehere Vereinfachung auf reines Stichtag+LT)."""
+    anchor, source = compute_anchor(make_item(**REF_2), stichtag)
+    assert anchor == Month.parse("2026_12") + 5 == Month.parse("2027_05")
+    assert source == "letzte OrderBook-Zeile 2026_12 + LT=5"
+
+
+def test_anchor_ignores_orders_before_the_stichtag(stichtag):
+    """Eine OrderBook-Zeile VOR dem Stichtag ist abgeschlossene Vergangenheit und
+    darf den Anchor nicht verschieben - nur eine Bestellung NACH dem Stichtag
+    zaehlt. Egal ob man dafuer alle Zeilen oder nur offene betrachtet: eine
+    vergangene Zeile wird vom Maximum mit dem Stichtag ohnehin ueberdeckt."""
     lean = make_item(lt=6, historie={}, order={})
-    busy = make_item(lt=6, historie={"2024_02": 200, "2025_11": 40}, order={"2026_09": 999})
-    assert compute_anchor(lean, stichtag)[0] == compute_anchor(busy, stichtag)[0] == stichtag + 6
+    past_order_only = make_item(lt=6, historie={"2024_02": 200}, order={"2025_01": 999})
+    assert compute_anchor(lean, stichtag)[0] == compute_anchor(past_order_only, stichtag)[0] == stichtag + 6
+
+
+def test_anchor_ignores_historie_even_when_recent(stichtag):
+    """Verkaeufe (Historie) fliessen weiterhin nie in den Anchor ein - nur das
+    OrderBook. Nur die Order-Seite der frueheren 'ignoriert alles'-Regel wurde
+    aufgeweicht, die Historie-Seite gilt unveraendert."""
+    lean = make_item(lt=6, historie={}, order={})
+    recent_sales_only = make_item(lt=6, historie={"2026_07": 40}, order={})
+    assert compute_anchor(lean, stichtag)[0] == compute_anchor(recent_sales_only, stichtag)[0] == stichtag + 6
 
 
 # --- Lieferluecke ---------------------------------------------------------
@@ -157,23 +180,28 @@ def test_mid_runner_small_gap_is_flagged_as_unvalidated_assumption(stichtag):
 
 
 def test_months_with_known_order_are_not_duplicated(stichtag):
-    """Anchor (Stichtag+LT=2026_09) faellt in ein dreimonatiges Orderbook-Fenster;
-    bei T=1 muss die Terminreihe durch alle drei bereits bekannten Monate laufen,
-    bevor der erste echte FCST-Punkt entsteht."""
-    item = make_item(avg_demand=60, lt=1,
+    """Seit der Anchor selbst an der letzten OrderBook-Zeile haengt (siehe
+    compute_anchor), kann er nur noch mit GENAU dieser einen Zeile kollidieren
+    (hier durch LT=0 erzwungen: Anchor = letzte Order 2026_11 + 0 = 2026_11,
+    die bereits per Order belegt ist) - nicht mehr mit mehreren Monaten davor,
+    weil das OrderBook per Definition nichts nach der letzten Zeile kennt."""
+    item = make_item(avg_demand=60, lt=0,
                      historie={"2025_01": 60, "2025_07": 60, "2026_01": 60},
                      order={"2026_09": 60, "2026_10": 60, "2026_11": 60})
     d = forecast(item, stichtag, CFG)
-    assert d.interval == 1 and d.anchor.label == "2026_09"
-    assert [m.label for m in d.skipped_months] == ["2026_09", "2026_10", "2026_11"]
+    assert d.interval == 1 and d.anchor.label == "2026_11"
+    assert [m.label for m in d.skipped_months] == ["2026_11"]
     series = d.as_series()
-    assert not ({"2026_09", "2026_10", "2026_11"} & series.keys())
+    assert "2026_11" not in series
     assert series["2026_12"] == 60
 
 
 def test_series_stays_inside_the_horizon(stichtag):
-    d = forecast(make_item(**REF_1), stichtag, Config(horizon_months=6))
-    assert all(p.month <= stichtag + 5 for p in d.fcst)
+    """Horizont gross genug gewaehlt, dass der (jetzt spaetere) Anchor 2027_03 noch
+    bequem hineinpasst - siehe test_anchor_beyond_horizon_is_still_shown_as_the_next_due_order
+    fuer den Fall, dass er es nicht tut."""
+    d = forecast(make_item(**REF_1), stichtag, Config(horizon_months=12))
+    assert all(p.month <= stichtag + 11 for p in d.fcst)
 
 
 def test_anchor_beyond_horizon_is_still_shown_as_the_next_due_order(stichtag):
@@ -201,22 +229,31 @@ def test_guarantee_first_order_can_be_disabled(stichtag):
 
 
 def test_guarantee_first_order_skips_months_already_covered_by_orders(stichtag):
-    """Faellt der Anchor (Stichtag+LT) in ein mehrmonatiges Orderbook-Fenster, muss
-    die Terminreihe erst durch die bereits bekannten Monate laufen, bevor der
-    erste echte FCST-Punkt entsteht."""
-    item = make_item(avg_demand=50, lt=1, historie={"2024_02": 50},
+    """Faellt der (jetzt OrderBook-basierte) Anchor mit LT=0 genau auf die letzte
+    bekannte Order-Zeile selbst, muss die Terminreihe diesen einen bereits
+    bekannten Monat ueberspringen, bevor der erste echte FCST-Punkt entsteht."""
+    item = make_item(avg_demand=50, lt=0, historie={"2024_02": 50},
                      order={"2026_09": 50, "2026_10": 50})
     d = forecast(item, stichtag, CFG)
-    assert d.interval == 1 and d.anchor == Month.parse("2026_09")
-    assert d.skipped_months == [Month.parse("2026_09"), Month.parse("2026_10")]
+    assert d.interval == 1 and d.anchor == Month.parse("2026_10")
+    assert d.skipped_months == [Month.parse("2026_10")]
     assert d.fcst[0].month == Month.parse("2026_11")
 
 
 def test_guarantee_first_order_has_a_safety_limit_against_endless_search(stichtag):
     """Wenn das Orderbook jeden Kandidatenmonat weit ueber den Horizont hinaus belegt,
-    bricht die Suche irgendwann ab, statt endlos zu laufen."""
+    bricht die Suche irgendwann ab, statt endlos zu laufen.
+
+    Seit der Anchor an der letzten OrderBook-Zeile haengt (siehe compute_anchor),
+    liegt er bei einem normalen (nicht-negativen) LT immer GENAU am Ende eines
+    solchen Bestellfensters - die Suche muesste dann hoechstens diesen einen
+    Monat ueberspringen, nie mehr (siehe test_months_with_known_order_are_not_duplicated).
+    Um die Notbremse selbst zu testen, wird hier bewusst ein unrealistisches,
+    stark negatives LT verwendet (excel_io klemmt LT beim Einlesen auf >= 0 -
+    das Modell selbst validiert es nicht), das den Anchor kuenstlich mitten in
+    das lange Bestellfenster zurueckwirft."""
     order = {m.label: 1 for m in month_range(stichtag, stichtag + 500)}
-    item = make_item(avg_demand=25, moq=100, lt=0, historie={"2024_02": 200}, order=order)
+    item = make_item(avg_demand=25, moq=100, lt=-500, historie={"2024_02": 200}, order=order)
     d = forecast(item, stichtag, CFG)
     assert d.fcst == []
     assert any("abgebrochen" in w for w in d.warnings)
@@ -242,7 +279,7 @@ def test_every_forecast_point_carries_a_reason(stichtag):
 def test_explain_covers_the_full_derivation(stichtag):
     text = forecast(make_item(**REF_2), stichtag, CFG).explain()
     for fragment in ("Klassifizierung", "Lieferluecke", "Menge Q", "Intervall T",
-                     "Erster Termin", "2027_01"):
+                     "Erster Termin", "2027_05"):
         assert fragment in text
 
 

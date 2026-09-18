@@ -60,17 +60,25 @@ def supply_gap(item: Item, stichtag: Month, cfg: Config):
 
 
 def compute_anchor(item: Item, stichtag: Month) -> tuple[Month, str]:
-    """Erster FCST-Termin = Stichtag + LT.
+    """Erster FCST-Termin = LT nach dem spaeteren aus Stichtag und letzter
+    OrderBook-Zeile.
 
-    So vom Kunden definitiv bestaetigt (Order-Buch und Historie fliessen NICHT
-    mehr in den Anchor selbst ein - nur noch in Klassifizierung und
-    Lieferluecke). Eine fruehere Fassung nahm das Maximum aus Stichtag+LT,
-    letzter Order+T und letztem Verkauf+LT; das wich bei einem der beiden
-    Referenzitems (1/136648: 2027_03 statt 2027_01) von dieser einfachen Regel
-    ab. Laut Kunde koennen die frei erstellten Referenzwerte in den Beispiel-
-    dateien selbst fehlerhaft sein (Handarbeit) - Stichtag+LT gilt als die
-    verbindliche Formel.
+    Kundenvorgabe: liegt im OrderBook eine Bestellung (Menge > 0) nach dem
+    Stichtag, startet der FCST erst nach deren LT - sonst zaehlt der Stichtag
+    selbst ("heute"), wie zuvor. OrderBook-Zeilen VOR dem Stichtag aendern
+    nichts: sie werden vom Maximum mit dem Stichtag ohnehin ueberdeckt, egal ob
+    man nur offene oder alle Zeilen betrachtet - deshalb genuegt der einfache
+    Vergleich mit der zeitlich letzten Order-Zeile.
+
+    Historie (Verkaeufe) fliesst weiterhin NICHT ein, nur das OrderBook.
+    Vorherige Fassung war bewusst auf reines Stichtag+LT vereinfacht worden;
+    das liess echte offene Bestellungen im OrderBook unberuecksichtigt und
+    wurde daher wieder verworfen.
     """
+    orders = item.order_events()
+    last_order = orders[-1] if orders else None
+    if last_order is not None and last_order > stichtag:
+        return last_order + item.lt, f"letzte OrderBook-Zeile {last_order} + LT={item.lt}"
     return stichtag + item.lt, f"Stichtag {stichtag} + LT={item.lt}"
 
 
