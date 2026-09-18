@@ -425,6 +425,7 @@ REPORT_COLUMNS = [
     ("FCST-Termine", lambda d, i: len(d.fcst)),
     ("FCST-Monate", lambda d, i: ", ".join(p.label for p in d.fcst)),
     ("FCST-Summe", lambda d, i: sum(p.qty for p in d.fcst) or None),
+    ("Abweichung FCST zu Demand", lambda d, i: d.demand_deviation),
     ("uebersprungen (Order vorhanden)", lambda d, i: ", ".join(m.label for m in d.skipped_months)),
     ("Annahmen", lambda d, i: " | ".join(d.assumptions)),
     ("Warnungen", lambda d, i: " | ".join(d.warnings)),

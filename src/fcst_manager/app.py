@@ -105,6 +105,7 @@ def _overview_frame(items, decisions, stichtag) -> pd.DataFrame:
                 "Anchor": d.anchor.label if d.anchor else None,
                 "FCST-Termine": len(d.fcst),
                 "FCST-Summe": sum(p.qty for p in d.fcst) or None,
+                "Abw. zu Demand": d.demand_deviation,
                 "Warnungen": len(d.warnings),
             }
         )
@@ -131,39 +132,59 @@ def _fcst_matrix(items, decisions, stichtag: Month, cfg: Config) -> pd.DataFrame
 
 
 def _derivation_rows(item: Item, decision: Decision, stichtag: Month) -> list[dict[str, object]]:
-    """Herleitung als Feld/Wert-Paare - bricht um, statt rechts abgeschnitten zu werden."""
-    rows: list[tuple[str, object]] = [
-        ("Klassifizierung", f"{decision.segment} — {decision.segment_reason}"),
+    """Herleitung als Kennzahl/Wert/Begruendung - eine Stats-Tabelle, aus der sich das
+    Ergebnis Zeile fuer Zeile nachvollziehen laesst, statt als Flusstext."""
+    rows: list[tuple[str, object, str]] = [
+        ("Klassifizierung", str(decision.segment), decision.segment_reason),
         (
             "Bestellungen",
-            f"{_orders_in_window(item, stichtag)} in den letzten {DISPLAY_WINDOW_MONTHS} Monaten, "
-            f"{decision.n_orders} in der gesamten Historie ({decision.history_window_months} Monate)",
+            f"{_orders_in_window(item, stichtag)} / {decision.n_orders}",
+            f"letzte {DISPLAY_WINDOW_MONTHS} Mon. / gesamte Historie ({decision.history_window_months} Mon.)",
         ),
+        ("LT", f"{item.lt} Monate", "Lieferzeit, geht in die Lieferlücke ein"),
+        (
+            "AVG Demand",
+            f"{item.avg_demand:.4g} Stk/Monat" if item.avg_demand else "—",
+            "Basis für Intervall T und Menge Q, falls hinterlegt",
+        ),
+        ("MOQ", f"{item.moq:g}" if item.moq else "—", "Mindestbestellmenge, rundet Menge Q auf"),
     ]
     if decision.last_commitment:
-        rows.append(("Letzte Bindung", f"{decision.last_commitment} ({decision.last_commitment_kind})"))
+        rows.append((
+            "Letzte Bestellung",
+            str(decision.last_commitment),
+            decision.last_commitment_kind,
+        ))
     if decision.gap_date:
         rows.append((
             "Lieferlücke",
-            f"{decision.gap_date} (letzte Bindung + LT {item.lt}), "
-            f"{decision.gap_months_from_stichtag:+d} Monate ab Stichtag → "
+            str(decision.gap_date),
+            f"letzte Bindung + LT, {decision.gap_months_from_stichtag:+d} Monate ab Stichtag → "
             + ("GROSS" if decision.large_gap else "klein"),
         ))
-    rows.append(("Ast", f"{decision.branch} — {decision.branch_reason}"))
+    rows.append(("Ast", str(decision.branch), decision.branch_reason))
     if decision.qty is not None:
-        rows.append(("Menge Q", f"{decision.qty:g} ({decision.qty_source})"))
+        rows.append(("Menge Q", f"{decision.qty:g}", decision.qty_source))
     if decision.implied_demand is not None:
-        rows.append(("Impliziter Demand", f"{decision.implied_demand:.2f} Stk/Monat"))
+        rows.append(("Impliziter Demand", f"{decision.implied_demand:.2f} Stk/Monat", ""))
     if decision.interval is not None:
-        rows.append(("Intervall T", f"{decision.interval} Monate ({decision.interval_source})"))
+        rows.append(("Intervall T", f"{decision.interval} Monate", decision.interval_source))
     if decision.anchor is not None:
-        rows.append(("Erster Termin", f"{decision.anchor} ({decision.anchor_source})"))
+        rows.append(("Erster Termin", str(decision.anchor), decision.anchor_source))
     if decision.skipped_months:
         rows.append((
             "Übersprungen",
-            ", ".join(m.label for m in decision.skipped_months) + " — Order bereits bekannt",
+            ", ".join(m.label for m in decision.skipped_months),
+            "Order bereits bekannt",
         ))
-    return [{"Schritt": k, "Herleitung": v} for k, v in rows]
+    if decision.demand_deviation is not None:
+        rows.append((
+            "Abw. zu Demand",
+            f"{decision.demand_deviation:+.1%}",
+            "Prüfkriterium: ((Σ Orderbook + Σ FCST im Horizont) / Horizont) / AVG Demand − 1; "
+            "0 % = Ø Monatsmenge trifft den Demand genau",
+        ))
+    return [{"Kennzahl": k, "Wert": v, "Begründung": b} for k, v, b in rows]
 
 
 def _fcst_points_frame(decision: Decision) -> pd.DataFrame:
@@ -420,7 +441,12 @@ def main() -> None:
             )
 
         st.subheader("Alle Artikel")
-        st.dataframe(_overview_frame(items, decisions, stichtag), width="stretch", height=420)
+        st.dataframe(
+            _overview_frame(items, decisions, stichtag),
+            width="stretch",
+            height=420,
+            column_config={"Abw. zu Demand": st.column_config.NumberColumn(format="percent")},
+        )
 
         if any(manual.values()):
             st.subheader("Vergleich mit dem manuellen FCST in der Datei")
@@ -468,7 +494,7 @@ def main() -> None:
         )
 
         st.subheader("Herleitung")
-        st.table(pd.DataFrame(_derivation_rows(item, decision, stichtag)).set_index("Schritt"))
+        st.table(pd.DataFrame(_derivation_rows(item, decision, stichtag)).set_index("Kennzahl"))
 
         if decision.fcst:
             st.subheader("FCST-Termine")

@@ -1,7 +1,7 @@
 import pytest
 
-from fcst_manager.engine import compute_anchor, forecast, supply_gap
-from fcst_manager.model import Branch, Config, Segment
+from fcst_manager.engine import compute_anchor, demand_deviation, forecast, supply_gap
+from fcst_manager.model import Branch, Config, Decision, FcstPoint, Segment
 from fcst_manager.periods import Month, month_range
 
 from .conftest import make_item
@@ -286,3 +286,52 @@ def test_explain_covers_the_full_derivation(stichtag):
 def test_invalid_horizon_is_rejected(stichtag):
     with pytest.raises(ValueError):
         forecast(make_item(**REF_1), stichtag, Config(horizon_months=0))
+
+
+# --- Pruefkriterium: Abweichung FCST zu Demand -----------------------------
+
+
+def _decision(stichtag, fcst):
+    return Decision(
+        item_number="X", stichtag=stichtag, segment=Segment.HIGH, segment_reason="",
+        branch=Branch.HIGH_STANDARD, branch_reason="", fcst=fcst,
+    )
+
+
+def test_demand_deviation_matches_the_documented_formula(stichtag):
+    """((Summe Orderbook + Summe FCST) / Horizont) / AVG Demand - 1, beide Summen auf
+    den Horizont-Zeitraum begrenzt (hier 2026_08..2026_11, 4 Monate)."""
+    item = make_item(avg_demand=10, order={"2026_09": 50, "2027_03": 999})
+    decision = _decision(stichtag, fcst=[
+        FcstPoint(month=Month.parse("2026_10"), qty=30, n=0, reason=""),
+        FcstPoint(month=Month.parse("2027_04"), qty=999, n=1, reason=""),  # ausserhalb -> ignoriert
+    ])
+    cfg = Config(horizon_months=4)
+    dev = demand_deviation(item, decision, stichtag, stichtag + 3, cfg)
+    # order 2027_03 und fcst 2027_04 liegen nach Horizont-Ende (2026_11) -> beide draussen.
+    # (50 + 30) / 4 / 10 - 1 = 2.0 - 1 = 1.0
+    assert dev == pytest.approx(1.0)
+
+
+def test_demand_deviation_is_zero_when_supply_exactly_matches_demand(stichtag):
+    item = make_item(avg_demand=10, order={})
+    decision = _decision(stichtag, fcst=[
+        FcstPoint(month=stichtag, qty=40, n=0, reason=""),
+    ])
+    cfg = Config(horizon_months=4)
+    dev = demand_deviation(item, decision, stichtag, stichtag + 3, cfg)
+    assert dev == pytest.approx(0.0)
+
+
+def test_demand_deviation_is_none_without_avg_demand(stichtag):
+    item = make_item(avg_demand=None, order={"2026_09": 50})
+    decision = _decision(stichtag, fcst=[FcstPoint(month=stichtag, qty=40, n=0, reason="")])
+    cfg = Config(horizon_months=4)
+    assert demand_deviation(item, decision, stichtag, stichtag + 3, cfg) is None
+
+
+def test_forecast_populates_demand_deviation_only_when_avg_demand_is_known(stichtag):
+    with_demand = forecast(make_item(**REF_2), stichtag, CFG)
+    without_demand = forecast(make_item(**REF_1), stichtag, CFG)
+    assert with_demand.demand_deviation == pytest.approx(0.1005135730007336)
+    assert without_demand.demand_deviation is None

@@ -238,11 +238,15 @@ def test_derivation_rows_cover_every_computed_quantity(computed):
 
     _, items, _, decisions, stichtag = computed
     item = next(i for i in items if i.item_number == "D228025-100")
-    rows = {r["Schritt"]: str(r["Herleitung"]) for r in _derivation_rows(item, decisions["D228025-100"], stichtag)}
+    rows = {
+        r["Kennzahl"]: f"{r['Wert']} {r['Begründung']}"
+        for r in _derivation_rows(item, decisions["D228025-100"], stichtag)
+    }
 
     assert "High Runner" in rows["Klassifizierung"]
-    assert "4 in den letzten 18 Monaten" in rows["Bestellungen"]
-    assert "6 in der gesamten Historie" in rows["Bestellungen"]
+    assert "4 / 6" in rows["Bestellungen"]
+    assert "letzte 18 Mon." in rows["Bestellungen"]
+    assert "gesamte Historie" in rows["Bestellungen"]
     assert "40" in rows["Menge Q"] and "Gleichstand" in rows["Menge Q"]
     assert "4 Monate" in rows["Intervall T"] and "impliziter Demand" in rows["Intervall T"]
     assert "2027_03" in rows["Erster Termin"] and "OrderBook" in rows["Erster Termin"]
@@ -339,4 +343,4 @@ def test_derivation_rows_stay_short_enough_to_read(computed):
     _, items, _, decisions, stichtag = computed
     for item in items:
         for row in _derivation_rows(item, decisions[item.item_number], stichtag):
-            assert row["Schritt"] and len(str(row["Schritt"])) <= 20
+            assert row["Kennzahl"] and len(str(row["Kennzahl"])) <= 20

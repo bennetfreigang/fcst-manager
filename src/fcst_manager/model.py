@@ -195,6 +195,13 @@ class Decision:
     warnings: list[str] = field(default_factory=list)
     assumptions: list[str] = field(default_factory=list)
 
+    demand_deviation: float | None = None
+    """Pruefkriterium: ((Summe Orderbook + Summe FCST) / Horizont) / AVG Demand - 1,
+    je auf den Horizont-Zeitraum begrenzt. 0 = die mittlere Monatsmenge aus Orderbook
+    und FCST deckt exakt den AVG Demand; positiv = mehr als Demand, negativ = weniger.
+    None, wenn kein AVG Demand hinterlegt ist (dann fehlt der Vergleichsmassstab).
+    Siehe engine.demand_deviation."""
+
     # -- Ausgabeformen -----------------------------------------------------
     def as_series(self) -> dict[str, float]:
         """FCST als {'2027_01': 40.0, ...} fuer den Excel-Export."""
@@ -229,6 +236,8 @@ class Decision:
             L.append(f"  Intervall T     : {self.interval} Monate  ({self.interval_source})")
         if self.anchor is not None:
             L.append(f"  Erster Termin   : {self.anchor}  ({self.anchor_source})")
+        if self.demand_deviation is not None:
+            L.append(f"  Abw. zu Demand  : {self.demand_deviation:+.1%}")
         if self.fcst:
             L.append("  FCST:")
             for p in self.fcst:

@@ -150,6 +150,33 @@ def _emit_series(
 
 
 # ---------------------------------------------------------------------------
+# Pruefkriterium: Abweichung FCST zu Demand
+# ---------------------------------------------------------------------------
+
+
+def demand_deviation(
+    item: Item, decision: Decision, stichtag: Month, horizon_end: Month, cfg: Config
+) -> float | None:
+    """((Summe Orderbook + Summe FCST) / Horizont) / AVG Demand - 1, beide Summen auf
+    den Horizont-Zeitraum begrenzt.
+
+    Unabhaengig vom gewaehlten Ast: ein nachtraegliches Pruefkriterium, ob die
+    mittlere Monatsmenge aus bereits gebundenem Orderbook und errechnetem FCST den
+    AVG Demand trifft. 0 = Treffer; positiv = FCST deckt mehr als Demand; negativ =
+    weniger (z.B. weil die 'mindestens ein Termin'-Garantie den einzigen Termin
+    hinter den Horizont schiebt, siehe _emit_series). Ohne AVG Demand fehlt der
+    Vergleichsmassstab -> None.
+    """
+    if not item.avg_demand or item.avg_demand <= 0:
+        return None
+    order_sum = sum(
+        q for m, q in item.order.items() if q and q > 0 and stichtag <= m <= horizon_end
+    )
+    fcst_sum = sum(p.qty for p in decision.fcst if p.month <= horizon_end)
+    return ((order_sum + fcst_sum) / cfg.horizon_months) / item.avg_demand - 1
+
+
+# ---------------------------------------------------------------------------
 # Hauptfunktion
 # ---------------------------------------------------------------------------
 
@@ -160,6 +187,10 @@ def forecast(item: Item, stichtag: Month, cfg: Config | None = None) -> Decision
     if cfg.horizon_months < 1:
         raise ValueError("horizon_months muss >= 1 sein")
     horizon_end = stichtag + (cfg.horizon_months - 1)
+
+    def finish(decision: Decision) -> Decision:
+        decision.demand_deviation = demand_deviation(item, decision, stichtag, horizon_end, cfg)
+        return decision
 
     segment, segment_reason, assumptions = classify(item, stichtag, cfg)
     commit, kind, gap_date, gap_months, large_gap, gap_warnings = supply_gap(item, stichtag, cfg)
@@ -186,7 +217,7 @@ def forecast(item: Item, stichtag: Month, cfg: Config | None = None) -> Decision
     if segment is Segment.SLEEPER:
         decision.branch = Branch.SLEEPER_NO_FCST
         decision.branch_reason = "Sleeper erzeugen laut Diagramm keinen FCST"
-        return decision
+        return finish(decision)
 
     # -- Q und T vorbereiten (fuer alle FCST-Aeste gleich) -----------------
     qty, qty_source, qty_warnings = compute_quantity(item, cfg)
@@ -214,16 +245,16 @@ def forecast(item: Item, stichtag: Month, cfg: Config | None = None) -> Decision
         backlog = item.open_order_events(stichtag)
         if not backlog:
             decision.branch_reason = "kein offener Backlog im Orderbook -> kein FCST"
-            return decision
+            return finish(decision)
         if item.avg_demand is None or item.avg_demand <= 0:
             decision.branch_reason = (
                 f"Backlog vorhanden ({', '.join(m.label for m in backlog)}), "
                 "aber kein AVG Demand -> kein FCST"
             )
-            return decision
+            return finish(decision)
         if qty is None or interval is None:
             decision.branch_reason = "Q oder T unbestimmbar -> kein FCST"
-            return decision
+            return finish(decision)
         anchor, anchor_source = compute_anchor(item, stichtag)
         decision.anchor, decision.anchor_source = anchor, anchor_source
         decision.branch_reason = (
@@ -231,7 +262,7 @@ def forecast(item: Item, stichtag: Month, cfg: Config | None = None) -> Decision
             f"{item.avg_demand:.4g} vorhanden -> Standard-Terminreihe"
         )
         _emit_series(item, decision, anchor, interval, qty, horizon_end, "Menge aus Historie", cfg)
-        return decision
+        return finish(decision)
 
     # -- Ast 3: High Runner + grosse Luecke --------------------------------
     # Diagramm: "FCST unter Beachtung des Demand".
@@ -249,10 +280,10 @@ def forecast(item: Item, stichtag: Month, cfg: Config | None = None) -> Decision
             decision.branch_reason = (
                 "kein AVG Demand vorhanden - 'Demand beachten' nicht anwendbar -> kein FCST"
             )
-            return decision
+            return finish(decision)
         if interval is None:
             decision.branch_reason = "T unbestimmbar -> kein FCST"
-            return decision
+            return finish(decision)
 
         demand_qty = round_to_moq(item.avg_demand * interval, item.moq)
         decision.qty = demand_qty
@@ -271,7 +302,7 @@ def forecast(item: Item, stichtag: Month, cfg: Config | None = None) -> Decision
             f"grosse Lieferluecke ({gap_months} Monate ab Stichtag) -> Menge aus Demand"
         )
         _emit_series(item, decision, anchor, interval, demand_qty, horizon_end, "Menge aus Demand", cfg)
-        return decision
+        return finish(decision)
 
     # -- Ast 4/5: kleine Luecke -> Standard-FCST ---------------------------
     decision.branch = Branch.HIGH_STANDARD if segment is Segment.HIGH else Branch.MID_STANDARD
@@ -284,11 +315,11 @@ def forecast(item: Item, stichtag: Month, cfg: Config | None = None) -> Decision
     if qty is None:
         decision.branch = Branch.NO_FCST_DATA
         decision.branch_reason = f"kein FCST: {qty_source}"
-        return decision
+        return finish(decision)
     if interval is None:
         decision.branch = Branch.NO_FCST_DATA
         decision.branch_reason = f"kein FCST: {interval_source}"
-        return decision
+        return finish(decision)
 
     anchor, anchor_source = compute_anchor(item, stichtag)
     decision.anchor, decision.anchor_source = anchor, anchor_source
@@ -297,4 +328,4 @@ def forecast(item: Item, stichtag: Month, cfg: Config | None = None) -> Decision
         f"Q={qty:g} alle {interval} Monate"
     )
     _emit_series(item, decision, anchor, interval, qty, horizon_end, "Menge aus Historie", cfg)
-    return decision
+    return finish(decision)
