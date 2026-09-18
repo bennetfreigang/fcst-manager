@@ -1,5 +1,7 @@
 """Tests der Streamlit-App: Aufbereitungsfunktionen und der komplette Upload-Pfad."""
 
+import io
+
 import pytest
 
 pytest.importorskip(
@@ -136,10 +138,14 @@ def test_fcst_matrix_shows_termine_beyond_the_horizon_from_the_order_guarantee(c
 
 @pytest.fixture
 def app():
+    """Startet im Modus 'Fertige Sammeldatei hochladen' - die Tests hier pruefen
+    genau diesen Pfad; der neue Split-Upload (SalesHistorie/OrderBook/Metadaten)
+    hat eigene Tests weiter unten."""
     from streamlit.testing.v1 import AppTest
 
     at = AppTest.from_file(str(APP), default_timeout=180)
     at.run()
+    at.radio[0].set_value("Fertige Sammeldatei hochladen").run()
     return at
 
 
@@ -244,6 +250,86 @@ def test_derivation_rows_cover_every_computed_quantity(computed):
     points = _fcst_points_frame(decisions["D228025-100"])
     assert list(points["Monat"]) == ["2027_01", "2027_05", "2027_09", "2028_01"]
     assert points["Begründung"].str.len().min() > 0
+
+
+# --- Split-Upload: SalesHistorie / OrderBook / Artikelstammdaten getrennt -
+
+
+def _mini_xlsx(rows: list[list[object]]) -> bytes:
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for row in rows:
+        ws.append(row)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+@pytest.fixture
+def split_app():
+    """Default-Modus ist bereits der Split-Upload (erste Radio-Option)."""
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_file(str(APP), default_timeout=180)
+    at.run()
+    return at
+
+
+def test_split_upload_starts_with_three_uploaders_and_no_data_yet(split_app):
+    assert not split_app.exception
+    assert len(split_app.file_uploader) == 3
+    assert "Bitte mindestens SalesHistorie und OrderBook" in split_app.caption[0].value
+
+
+def test_split_upload_merges_intersection_by_default_and_computes_fcst(split_app):
+    hist = _mini_xlsx([["ItemNumber", "2025_01", "2025_06"], ["A", 10, 10], ["B", 5, 0]])
+    order = _mini_xlsx([["ItemNumber", "2026_09"], ["A", 10]])
+    meta = _mini_xlsx([["ItemNumber", "AVG Demand", "MOQ", "LT"], ["A", 12.5, 5, 3]])
+
+    at = split_app
+    at.file_uploader[0].set_value(("hist.xlsx", hist, MIME))
+    at.file_uploader[1].set_value(("order.xlsx", order, MIME))
+    at.file_uploader[2].set_value(("meta.xlsx", meta, MIME))
+    at.run()
+
+    assert "Schnittmenge" in at.radio[1].value, "Default-Preset ist die Schnittmenge"
+    at.text_input[0].set_value("2026_08").run()  # Stichtag des Merge-Schritts
+
+    assert not at.exception
+    assert {m.label: m.value for m in at.metric}["Artikel"] == "1", "nur A ist in beiden Quellen"
+    assert [t.label for t in at.tabs] == ["Übersicht", "FCST-Matrix", "Artikel-Detail", "Export"]
+
+
+def test_split_upload_union_preset_includes_items_from_either_source(split_app):
+    hist = _mini_xlsx([["ItemNumber", "2025_01"], ["A", 10], ["B", 5]])
+    order = _mini_xlsx([["ItemNumber", "2026_09"], ["A", 10]])
+
+    at = split_app
+    at.file_uploader[0].set_value(("hist.xlsx", hist, MIME))
+    at.file_uploader[1].set_value(("order.xlsx", order, MIME))
+    at.run()
+
+    at.radio[1].set_value("Vereinigung — in mindestens einer Quelle").run()
+    at.text_input[0].set_value("2026_08").run()
+
+    assert not at.exception
+    assert {m.label: m.value for m in at.metric}["Artikel"] == "2"
+
+
+def test_split_upload_without_meta_file_treats_all_items_as_unknown(split_app):
+    hist = _mini_xlsx([["ItemNumber", "2025_01"], ["A", 10]])
+    order = _mini_xlsx([["ItemNumber", "2025_01"], ["A", 0]])
+
+    at = split_app
+    at.file_uploader[0].set_value(("hist.xlsx", hist, MIME))
+    at.file_uploader[1].set_value(("order.xlsx", order, MIME))
+    at.run()
+
+    assert any("Keine Artikelstammdaten" in i.value for i in at.info)
+    at.text_input[0].set_value("2026_08").run()
+    assert not at.exception
 
 
 def test_derivation_rows_stay_short_enough_to_read(computed):

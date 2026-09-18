@@ -20,7 +20,15 @@ import pandas as pd
 import streamlit as st
 
 from fcst_manager.engine import forecast
-from fcst_manager.excel_io import compare_with_manual, read_items, write_output
+from fcst_manager.excel_io import (
+    build_combined_workbook,
+    compare_with_manual,
+    read_item_master_table,
+    read_items,
+    read_orderbook_table,
+    read_sales_history_table,
+    write_output,
+)
 from fcst_manager.model import (
     UNVALIDATED_BRANCHES,
     Config,
@@ -183,17 +191,11 @@ def _timeline_frame(item: Item, decision: Decision, stichtag: Month, full: bool)
 
 
 # ---------------------------------------------------------------------------
-# Oberflaeche
+# Upload: fertige Sammeldatei ODER drei getrennte Dateien
 # ---------------------------------------------------------------------------
 
 
-def main() -> None:
-    st.set_page_config(
-        page_title="FCST Rechner", page_icon="📦", layout="wide"
-    )
-
-    st.title("📦 Forecast Rechner")
-
+def _upload_combined() -> tuple[bytes | None, str | None]:
     uploaded = st.file_uploader(
         "Excel-Datei hochladen",
         type=["xlsx", "xlsm"],
@@ -211,9 +213,117 @@ def main() -> None:
             "* **Zeile 3 ff** — je Zeile ein Artikel; `.` oder leer bedeutet „unbekannt“\n\n"
             "Der Stichtag wird aus der ersten FCST-Spalte abgeleitet."
         )
-        st.stop()
+        return None, None
 
-    raw = uploaded.getvalue()
+    return uploaded.getvalue(), uploaded.name.rsplit(".", 1)[0]
+
+
+def _upload_split() -> tuple[bytes | None, str | None]:
+    st.info(
+        "Drei einfache Dateien statt einer manuell zusammengebauten Sammeldatei: "
+        "je eine Kopfzeile mit `ItemNumber` + Monatsspalten (`JJJJ_MM`) für SalesHistorie "
+        "und OrderBook, dazu `ItemNumber`, `AVG Demand`, `MOQ`, `LT` für die Artikelstammdaten."
+    )
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        hist_file = st.file_uploader("SalesHistorie", type=["xlsx", "xlsm"], key="hist_upload")
+    with col2:
+        order_file = st.file_uploader("OrderBook", type=["xlsx", "xlsm"], key="order_upload")
+    with col3:
+        meta_file = st.file_uploader(
+            "Artikelstammdaten (AVG Demand / MOQ / LT)",
+            type=["xlsx", "xlsm"],
+            key="meta_upload",
+            help="Optional. Fehlt die Datei, gelten AVG Demand/MOQ/LT für alle Artikel als unbekannt.",
+        )
+
+    if hist_file is None or order_file is None:
+        st.caption("Bitte mindestens SalesHistorie und OrderBook hochladen.")
+        return None, None
+
+    try:
+        historie, w1 = read_sales_history_table(io.BytesIO(hist_file.getvalue()))
+        order, w2 = read_orderbook_table(io.BytesIO(order_file.getvalue()))
+        meta, w3 = read_item_master_table(io.BytesIO(meta_file.getvalue())) if meta_file else ({}, [])
+    except Exception as exc:  # Datei-/Layoutfehler dem Nutzer zeigen, nicht als Traceback
+        st.error(f"Datei konnte nicht gelesen werden: {exc}")
+        return None, None
+
+    for warn in w1 + w2 + w3:
+        st.warning(warn, icon="⚠️")
+    if meta_file is None:
+        st.info(
+            "Keine Artikelstammdaten hochgeladen — AVG Demand/MOQ/LT gelten für alle "
+            "Artikel als unbekannt.",
+            icon="ℹ️",
+        )
+
+    hist_items = set(historie)
+    order_items = set(order)
+    presets = {
+        "Schnittmenge — in beiden Quellen": hist_items & order_items,
+        "Vereinigung — in mindestens einer Quelle": hist_items | order_items,
+        "Nur SalesHistorie": hist_items - order_items,
+        "Nur OrderBook": order_items - hist_items,
+    }
+    choice = st.radio(
+        "Für welche Artikel soll ein FCST erstellt werden?",
+        list(presets),
+        format_func=lambda k: f"{k}  ({len(presets[k])} Artikel)",
+    )
+    item_numbers = sorted(presets[choice])
+    if not item_numbers:
+        st.warning("Diese Auswahl enthält keine Artikel.", icon="⚠️")
+        return None, None
+
+    c1, c2 = st.columns(2)
+    stichtag_label = c1.text_input(
+        "Stichtag (JJJJ_MM)", value=Month.today().label, key="split_stichtag",
+        help="Legt fest, ab welchem Monat die FCST-Spalten der zusammengeführten Datei beginnen.",
+    )
+    horizon = c2.number_input(
+        "Horizont (Monate)", min_value=1, max_value=60, value=18, key="split_horizon",
+        help="Anzahl FCST-Spalten in der zusammengeführten Datei. Kann unten im Reiter "
+        "'Einstellungen' für die Anzeige noch separat angepasst werden.",
+    )
+    try:
+        stichtag = Month.parse(stichtag_label)
+    except ValueError as exc:
+        st.error(f"Stichtag unlesbar: {exc}")
+        return None, None
+
+    wb = build_combined_workbook(historie, order, meta, item_numbers, stichtag, int(horizon))
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    st.success(f"{len(item_numbers)} Artikel zusammengeführt, Stichtag {stichtag}.")
+    return buffer.getvalue(), "FCST_Zusammengefuehrt"
+
+
+# ---------------------------------------------------------------------------
+# Oberflaeche
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    st.set_page_config(
+        page_title="FCST Rechner", page_icon="📦", layout="wide"
+    )
+
+    st.title("📦 Forecast Rechner")
+
+    mode = st.radio(
+        "Eingabe",
+        ["SalesHistorie / OrderBook einzeln hochladen", "Fertige Sammeldatei hochladen"],
+        horizontal=True,
+    )
+    if mode == "Fertige Sammeldatei hochladen":
+        raw, source_name = _upload_combined()
+    else:
+        raw, source_name = _upload_split()
+
+    if raw is None:
+        st.stop()
 
     try:
         layout, items, manual = _load(raw, None)
@@ -383,7 +493,7 @@ def main() -> None:
         )
         buffer = io.BytesIO()
         write_output(io.BytesIO(raw), buffer, layout, items, decisions, manual)
-        name = uploaded.name.rsplit(".", 1)[0]
+        name = source_name or "FCST"
         st.download_button(
             "Excel mit FCST herunterladen",
             data=buffer.getvalue(),

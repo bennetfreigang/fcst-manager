@@ -17,7 +17,7 @@ from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 
 from .model import Decision, Item, clean_number
-from .periods import Month
+from .periods import Month, month_range
 
 Source: TypeAlias = "str | Path | IO[bytes]"
 """Pfad oder offener Byte-Stream - letzteres fuer Uploads (Streamlit)."""
@@ -222,6 +222,176 @@ def read_items(path: Source, sheet: str | None = None):
 
     wb.close()
     return layout, items, manual
+
+
+# ---------------------------------------------------------------------------
+# Getrennte Uploads (SalesHistorie / OrderBook / Artikelstammdaten)
+# ---------------------------------------------------------------------------
+#
+# Alternative zur Sammeldatei oben: statt einer Datei mit Historie/Order/FCST
+# in einem Blatt liefert der Nutzer drei separate, einfachere Dateien mit nur
+# einer Kopfzeile. Diese werden zu einer Sammeldatei im Standardlayout
+# zusammengefuehrt (build_combined_workbook) - ab da laufen read_items,
+# write_output und die gesamte App unveraendert weiter.
+
+
+def _read_item_series_table(
+    path: Source, sheet: str | None = None
+) -> tuple[dict[str, dict[Month, float]], list[str]]:
+    """Liest eine Datei mit einer Kopfzeile: ItemNumber + Monatsspalten (JJJJ_MM).
+
+    Fuer SalesHistorie- und OrderBook-Upload - im Gegensatz zur Sammeldatei gibt
+    es hier nur einen Abschnitt je Datei, eine Abschnittszeile ist daher nicht
+    noetig.
+    """
+    wb = openpyxl.load_workbook(path, data_only=True)
+    ws = wb[sheet] if sheet else wb.worksheets[0]
+    headers = {c: ws.cell(1, c).value for c in range(1, ws.max_column + 1)}
+
+    item_col: int | None = None
+    month_cols: dict[Month, int] = {}
+    warnings: list[str] = []
+    for col, header in headers.items():
+        h = _norm(header)
+        if not h:
+            continue
+        if item_col is None and any(h == n or h.startswith(n) or n in h for n in _META_FIELDS["item_number"]):
+            item_col = col
+            continue
+        try:
+            month = Month.parse(header)
+        except ValueError:
+            warnings.append(f"Spalte {col} ('{header}') ist weder ItemNumber- noch Monatsspalte - ignoriert")
+            continue
+        if month in month_cols:
+            warnings.append(f"Monat {month} kommt mehrfach vor - Spalte {col} gewinnt")
+        month_cols[month] = col
+
+    if item_col is None:
+        warnings.append("Pflichtspalte fuer 'item_number' nicht gefunden")
+        wb.close()
+        return {}, warnings
+
+    result: dict[str, dict[Month, float]] = {}
+    for row in range(2, ws.max_row + 1):
+        raw_number = ws.cell(row, item_col).value
+        if raw_number in (None, ""):
+            continue
+        item_number = str(raw_number).strip()
+        series: dict[Month, float] = {}
+        for month, col in month_cols.items():
+            value, warn = clean_number(ws.cell(row, col).value, field_name=f"{item_number} {month}")
+            if warn:
+                warnings.append(warn)
+            if value:
+                series[month] = value
+        result[item_number] = series
+
+    wb.close()
+    return result, warnings
+
+
+def read_sales_history_table(path: Source, sheet: str | None = None):
+    """SalesHistorie-Upload: ItemNumber + Monatsspalten mit Verkaufsmengen."""
+    return _read_item_series_table(path, sheet)
+
+
+def read_orderbook_table(path: Source, sheet: str | None = None):
+    """OrderBook-Upload: ItemNumber + Monatsspalten mit offenen Bestellmengen."""
+    return _read_item_series_table(path, sheet)
+
+
+def read_item_master_table(
+    path: Source, sheet: str | None = None
+) -> tuple[dict[str, dict[str, float | int | None]], list[str]]:
+    """Artikelstammdaten-Upload: ItemNumber, AVG Demand, MOQ, LT (eine Kopfzeile)."""
+    wb = openpyxl.load_workbook(path, data_only=True)
+    ws = wb[sheet] if sheet else wb.worksheets[0]
+    headers = {c: ws.cell(1, c).value for c in range(1, ws.max_column + 1)}
+
+    meta_cols, warnings = _resolve_meta_columns(headers)
+    if "item_number" not in meta_cols:
+        wb.close()
+        return {}, warnings
+
+    result: dict[str, dict[str, float | int | None]] = {}
+    for row in range(2, ws.max_row + 1):
+        raw_number = ws.cell(row, meta_cols["item_number"]).value
+        if raw_number in (None, ""):
+            continue
+        item_number = str(raw_number).strip()
+        entry: dict[str, float | int | None] = {}
+        for field_name in ("avg_demand", "moq", "lt"):
+            col = meta_cols.get(field_name)
+            if col is None:
+                continue
+            value, warn = clean_number(ws.cell(row, col).value, field_name=f"{item_number} {field_name}")
+            if warn:
+                warnings.append(warn)
+            entry[field_name] = value
+        result[item_number] = entry
+
+    wb.close()
+    return result, warnings
+
+
+def build_combined_workbook(
+    historie: dict[str, dict[Month, float]],
+    order: dict[str, dict[Month, float]],
+    meta: dict[str, dict[str, float | int | None]],
+    item_numbers: list[str],
+    stichtag: Month,
+    horizon_months: int,
+) -> openpyxl.Workbook:
+    """Fuegt die drei getrennten Uploads zu einer Sammeldatei im Standardlayout
+    zusammen (Zeile 1 Abschnitt, Zeile 2 Spaltenkopf, ab Zeile 3 je Artikel eine
+    Zeile) - danach ist sie fuer read_items/write_output nicht mehr von einer
+    manuell gepflegten Sammeldatei zu unterscheiden. Die FCST-Spalten bleiben
+    leer; ihre Breite (Stichtag..Stichtag+horizon-1) legt fest, wie weit
+    write_output spaeter beim Export befuellen kann.
+    """
+    hist_months = sorted({m for series in historie.values() for m in series})
+    order_months = sorted({m for series in order.values() for m in series})
+    fcst_months = month_range(stichtag, stichtag + (horizon_months - 1))
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Tabelle1"
+
+    meta_headers = ["ItemNumber", "AVG Demand", "MOQ", "LT"]
+    sections: list[object] = [None] * len(meta_headers)
+    sections += ["Historie"] * len(hist_months)
+    sections += ["Order"] * len(order_months)
+    sections += ["FCST"] * len(fcst_months)
+    headers = (
+        meta_headers
+        + [m.label for m in hist_months]
+        + [m.label for m in order_months]
+        + [m.label for m in fcst_months]
+    )
+
+    ws.append(sections)
+    ws.append(headers)
+    for cell in ws[2]:
+        cell.font = Font(bold=True)
+
+    for number in item_numbers:
+        item_meta = meta.get(number, {})
+        h = historie.get(number, {})
+        o = order.get(number, {})
+        row = [
+            number,
+            item_meta.get("avg_demand"),
+            item_meta.get("moq"),
+            item_meta.get("lt"),
+        ]
+        row += [h.get(m) for m in hist_months]
+        row += [o.get(m) for m in order_months]
+        row += [None] * len(fcst_months)
+        ws.append(row)
+
+    ws.freeze_panes = "E3"
+    return wb
 
 
 # ---------------------------------------------------------------------------

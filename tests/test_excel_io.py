@@ -5,12 +5,31 @@ import pytest
 
 from fcst_manager.cli import main as cli_main
 from fcst_manager.engine import forecast
-from fcst_manager.excel_io import compare_with_manual, read_items, write_output
+from fcst_manager.excel_io import (
+    build_combined_workbook,
+    compare_with_manual,
+    read_item_master_table,
+    read_items,
+    read_orderbook_table,
+    read_sales_history_table,
+    write_output,
+)
 from fcst_manager.model import Config
+from fcst_manager.periods import Month
 
 from .conftest import DATA
 
 SAMPLE = DATA / "Sammeldatei_Test.xlsx"
+
+
+def _wb(rows: list[list[object]], tmp_path, name="in.xlsx"):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for row in rows:
+        ws.append(row)
+    path = tmp_path / name
+    wb.save(path)
+    return path
 
 
 # --- Referenzdateien ------------------------------------------------------
@@ -161,3 +180,84 @@ def test_cli_compare_t_lists_only_items_without_demand(capsys):
 def test_cli_rejects_unknown_t_method():
     with pytest.raises(SystemExit):
         cli_main(["run", str(SAMPLE), "--t-method", "gibtsnicht"])
+
+
+# --- Getrennte Uploads: SalesHistorie / OrderBook / Artikelstammdaten -----
+
+
+def test_read_sales_history_table_reads_one_header_row(tmp_path):
+    path = _wb(
+        [
+            ["ItemNumber", "2025_01", "2025_02"],
+            ["A", 10, 0],
+            ["B", ".", 5],
+        ],
+        tmp_path,
+    )
+    historie, warnings = read_sales_history_table(path)
+    assert warnings == []
+    assert historie["A"] == {Month.parse("2025_01"): 10.0}
+    assert historie["B"] == {Month.parse("2025_02"): 5.0}
+
+
+def test_read_orderbook_table_ignores_unparseable_extra_columns(tmp_path):
+    path = _wb(
+        [
+            ["ItemNumber", "2026_07", "Kommentar"],
+            ["A", 40, "Split-Lieferung"],
+        ],
+        tmp_path,
+    )
+    order, warnings = read_orderbook_table(path)
+    assert order["A"] == {Month.parse("2026_07"): 40.0}
+    assert any("weder ItemNumber- noch Monatsspalte" in w for w in warnings)
+
+
+def test_read_item_master_table_resolves_tolerant_columns_and_dot_placeholder(tmp_path):
+    path = _wb(
+        [
+            ["Item Number", "AVG Demand", "MOQ", "LT [mon]"],
+            ["A", 12.5, 50, 5],
+            ["B", ".", ".", 3],
+        ],
+        tmp_path,
+    )
+    meta, warnings = read_item_master_table(path)
+    assert warnings == []
+    assert meta["A"] == {"avg_demand": 12.5, "moq": 50.0, "lt": 5.0}
+    assert meta["B"] == {"avg_demand": None, "moq": None, "lt": 3.0}
+
+
+def test_build_combined_workbook_roundtrips_through_read_items(tmp_path):
+    """Simuliert den App-Merge-Schritt: drei getrennte Quellen -> Sammeldatei ->
+    read_items() sieht danach eine ganz normale Sammeldatei."""
+    historie = {
+        "A": {Month.parse("2025_01"): 10.0, Month.parse("2025_06"): 10.0},
+        "B": {Month.parse("2025_03"): 5.0},
+    }
+    order = {"A": {Month.parse("2026_09"): 10.0}}
+    meta = {"A": {"avg_demand": 12.5, "moq": 5.0, "lt": 3.0}}
+    stichtag = Month.parse("2026_08")
+
+    wb = build_combined_workbook(historie, order, meta, ["A", "B"], stichtag, horizon_months=6)
+    path = tmp_path / "merged.xlsx"
+    wb.save(path)
+
+    layout, items, _ = read_items(path)
+    assert layout.stichtag() == stichtag
+    assert len(layout.fcst) == 6
+    by_number = {i.item_number: i for i in items}
+
+    a = by_number["A"]
+    assert a.avg_demand == 12.5 and a.moq == 5.0 and a.lt == 3
+    assert a.historie[Month.parse("2025_01")] == 10.0
+    assert a.order[Month.parse("2026_09")] == 10.0
+
+    b = by_number["B"]
+    assert b.avg_demand is None and b.moq is None
+    assert "LT fehlt" in " ".join(b.warnings), "B hat keinen Metadaten-Eintrag -> LT unbekannt"
+    assert b.historie[Month.parse("2025_03")] == 5.0
+    assert b.order.get(Month.parse("2026_09"), 0) == 0, "B war nicht im OrderBook -> keine Order"
+
+    decision = forecast(a, stichtag, Config())
+    assert decision.segment is not None  # laeuft durch die normale Engine ohne Sonderfall

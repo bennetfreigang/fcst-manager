@@ -21,8 +21,21 @@ CLI und Engine weiterhin; die App-Tests überspringen sich dann selbst.
 uv run streamlit run src/fcst_manager/app.py
 ```
 
-Excel hochladen (Aufbau wie die Beispieldateien) — die App klassifiziert jede Zeile,
-rechnet den FCST und zeigt ihn in vier Reitern:
+Zwei Wege, an die Daten zu kommen:
+
+* **SalesHistorie / OrderBook einzeln hochladen** (Standard) — drei einfache Dateien statt
+  einer manuell zusammengebauten Sammeldatei: SalesHistorie und OrderBook mit je einer
+  Kopfzeile (`ItemNumber` + Monatsspalten `JJJJ_MM`), dazu optional die Artikelstammdaten
+  (`ItemNumber`, `AVG Demand`, `MOQ`, `LT`). Anschließend legt man per Preset fest, für
+  welche Artikel ein FCST erzeugt werden soll — Schnittmenge (in beiden Quellen),
+  Vereinigung (in mindestens einer), nur SalesHistorie oder nur OrderBook — sowie Stichtag
+  und Horizont. Die App baut daraus intern dieselbe Sammeldatei-Struktur wie unten
+  beschrieben.
+* **Fertige Sammeldatei hochladen** — der bisherige Weg: eine bereits von Hand
+  zusammengeführte Excel-Datei im Format der Beispieldateien.
+
+In beiden Fällen klassifiziert die App danach jede Zeile, rechnet den FCST und zeigt ihn
+in vier Reitern:
 
 | Reiter | Inhalt |
 |---|---|
