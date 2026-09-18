@@ -250,10 +250,20 @@ def test_derivation_rows_cover_every_computed_quantity(computed):
     assert "40" in rows["Menge Q"] and "Gleichstand" in rows["Menge Q"]
     assert "4 Monate" in rows["Intervall T"] and "impliziter Demand" in rows["Intervall T"]
     assert "2027_03" in rows["Erster Termin"] and "OrderBook" in rows["Erster Termin"]
+    assert "—" in rows["Abw. zu Demand"], "D228025-100 hat kein AVG Demand -> Zeile bleibt sichtbar, aber leer"
 
     points = _fcst_points_frame(decisions["D228025-100"])
     assert list(points["Monat"]) == ["2027_03", "2027_07", "2027_11"]
     assert points["Begründung"].str.len().min() > 0
+
+
+def test_derivation_rows_show_demand_deviation_percentage_when_avg_demand_is_known(computed):
+    from fcst_manager.app import _derivation_rows
+
+    _, items, _, decisions, stichtag = computed
+    item = next(i for i in items if i.item_number == "1/136648")
+    rows = {r["Kennzahl"]: r["Wert"] for r in _derivation_rows(item, decisions["1/136648"], stichtag)}
+    assert rows["Abw. zu Demand"] == "+10.1%"
 
 
 # --- Split-Upload: SalesHistorie / OrderBook / Artikelstammdaten getrennt -

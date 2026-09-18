@@ -177,13 +177,14 @@ def _derivation_rows(item: Item, decision: Decision, stichtag: Month) -> list[di
             ", ".join(m.label for m in decision.skipped_months),
             "Order bereits bekannt",
         ))
-    if decision.demand_deviation is not None:
-        rows.append((
-            "Abw. zu Demand",
-            f"{decision.demand_deviation:+.1%}",
-            "Prüfkriterium: ((Σ Orderbook + Σ FCST im Horizont) / Horizont) / AVG Demand − 1; "
-            "0 % = Ø Monatsmenge trifft den Demand genau",
-        ))
+    rows.append((
+        "Abw. zu Demand",
+        f"{decision.demand_deviation:+.1%}" if decision.demand_deviation is not None else "—",
+        "Prüfkriterium: ((Σ Orderbook + Σ FCST im Horizont) / Horizont) / AVG Demand − 1; "
+        "0 % = Ø Monatsmenge trifft den Demand genau"
+        if decision.demand_deviation is not None
+        else "kein AVG Demand hinterlegt -> kein Vergleichsmaßstab",
+    ))
     return [{"Kennzahl": k, "Wert": v, "Begründung": b} for k, v, b in rows]
 
 
