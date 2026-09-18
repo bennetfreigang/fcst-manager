@@ -2,6 +2,7 @@
 
 import io
 
+import pandas as pd
 import pytest
 
 pytest.importorskip(
@@ -12,6 +13,7 @@ pytest.importorskip(
 from fcst_manager.app import (  # noqa: E402
     DISPLAY_WINDOW_MONTHS,
     _fcst_matrix,
+    _old_vs_new_frame,
     _orders_in_window,
     _overview_frame,
     _timeline_frame,
@@ -19,6 +21,7 @@ from fcst_manager.app import (  # noqa: E402
 from fcst_manager.engine import forecast
 from fcst_manager.excel_io import read_items
 from fcst_manager.model import Config, IntervalMethod
+from fcst_manager.periods import Month
 
 from .conftest import DATA, ROOT, make_item
 
@@ -264,6 +267,28 @@ def test_derivation_rows_show_demand_deviation_percentage_when_avg_demand_is_kno
     item = next(i for i in items if i.item_number == "1/136648")
     rows = {r["Kennzahl"]: r["Wert"] for r in _derivation_rows(item, decisions["1/136648"], stichtag)}
     assert rows["Abw. zu Demand"] == "+10.1%"
+
+
+def test_old_vs_new_frame_compares_month_by_month(computed):
+    """Zeile fuer Zeile: jeder Monat aus altem UND neuem FCST bekommt eine eigene
+    Zeile, auch wenn er nur auf einer der beiden Seiten vorkommt."""
+    _, items, _, decisions, stichtag = computed
+    decision = decisions["D228025-100"]
+    assert decision.as_series() == {"2027_03": 40, "2027_07": 40, "2027_11": 40}
+
+    old = {
+        Month.parse("2027_03"): 40,   # Treffer
+        Month.parse("2027_07"): 30,   # Differenz
+        Month.parse("2028_01"): 99,   # nur im alten FCST
+    }
+    frame = _old_vs_new_frame(decision, old).set_index("Monat")
+
+    assert frame.loc["2027_03", ["Alt", "Neu", "Differenz", "Treffer"]].tolist() == [40, 40, 0, True]
+    assert frame.loc["2027_07", ["Alt", "Neu", "Differenz", "Treffer"]].tolist() == [30, 40, 10, False]
+    assert frame.loc["2028_01", "Neu"] is None or pd.isna(frame.loc["2028_01", "Neu"])
+    assert frame.loc["2028_01", "Differenz"] == -99
+    assert frame.loc["2027_11", "Alt"] is None or pd.isna(frame.loc["2027_11", "Alt"])
+    assert frame.loc["2027_11", "Differenz"] == 40
 
 
 # --- Split-Upload: SalesHistorie / OrderBook / Artikelstammdaten getrennt -

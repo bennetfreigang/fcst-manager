@@ -10,6 +10,7 @@ from fcst_manager.excel_io import (
     compare_with_manual,
     read_item_master_table,
     read_items,
+    read_old_fcst_table,
     read_orderbook_table,
     read_sales_history_table,
     write_output,
@@ -207,6 +208,24 @@ def test_read_orderbook_table_ignores_unparseable_extra_columns(tmp_path):
     order, warnings = read_orderbook_table(path)
     assert order["A"] == {Month.parse("2026_07"): 40.0}
     assert any("weder ItemNumber- noch Monatsspalte" in w for w in warnings)
+
+
+def test_read_old_fcst_table_reads_one_header_row(tmp_path):
+    """Gleiches einfaches Format wie SalesHistorie/OrderBook - nutzbar unabhaengig
+    vom Eingabemodus, auch fuer die per Split-Upload zusammengefuehrte Datei, die
+    selbst keine befuellten FCST-Spalten hat (siehe build_combined_workbook)."""
+    path = _wb(
+        [
+            ["ItemNumber", "2027_01", "2027_04"],
+            ["A", 40, "."],
+            ["B", 0, 150],
+        ],
+        tmp_path,
+    )
+    old_fcst, warnings = read_old_fcst_table(path)
+    assert warnings == []
+    assert old_fcst["A"] == {Month.parse("2027_01"): 40.0}
+    assert old_fcst["B"] == {Month.parse("2027_04"): 150.0}
 
 
 def test_read_item_master_table_resolves_tolerant_columns_and_dot_placeholder(tmp_path):

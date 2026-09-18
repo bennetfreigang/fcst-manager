@@ -301,6 +301,14 @@ def read_orderbook_table(path: Source, sheet: str | None = None):
     return _read_item_series_table(path, sheet)
 
 
+def read_old_fcst_table(path: Source, sheet: str | None = None):
+    """Upload eines frueheren FCST-Laufs zum Vergleich: ItemNumber + Monatsspalten
+    (gleiches einfaches Format wie SalesHistorie/OrderBook). Unabhaengig vom
+    Eingabemodus nutzbar - auch im Split-Upload, dessen zusammengefuehrte Datei
+    selbst keine befuellten FCST-Spalten hat (siehe build_combined_workbook)."""
+    return _read_item_series_table(path, sheet)
+
+
 def read_item_master_table(
     path: Source, sheet: str | None = None
 ) -> tuple[dict[str, dict[str, float | int | None]], list[str]]:
@@ -466,7 +474,7 @@ def _write_report_sheet(wb, items, decisions, manual) -> None:
     compare = bool(any(manual.values()))
     headers = [name for name, _ in REPORT_COLUMNS]
     if compare:
-        headers += ["Vergleich manueller FCST", "Abweichende Monate"]
+        headers += ["Vergleich alter FCST", "Abweichende Monate"]
     ws.append(headers)
     for cell in ws[1]:
         cell.font = Font(bold=True)

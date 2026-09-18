@@ -25,6 +25,7 @@ from fcst_manager.excel_io import (
     compare_with_manual,
     read_item_master_table,
     read_items,
+    read_old_fcst_table,
     read_orderbook_table,
     read_sales_history_table,
     write_output,
@@ -192,6 +193,25 @@ def _fcst_points_frame(decision: Decision) -> pd.DataFrame:
     return pd.DataFrame(
         [{"Monat": p.label, "Menge": p.qty, "Begründung": p.reason} for p in decision.fcst]
     )
+
+
+def _old_vs_new_frame(decision: Decision, old: dict[Month, float]) -> pd.DataFrame:
+    """Alter (hinterlegter) FCST vs. neu berechneter FCST, Monat fuer Monat - loest
+    im Artikel-Detail den zusammengefassten Abweichungs-Text durch eine Zeile-fuer-
+    Zeile-Tabelle ab, in der jeder einzelne Monat einzeln zu sehen ist."""
+    computed = {p.month: p.qty for p in decision.fcst}
+    months = sorted(set(old) | set(computed))
+    rows = [
+        {
+            "Monat": m.label,
+            "Alt": old.get(m),
+            "Neu": computed.get(m),
+            "Differenz": (computed.get(m) or 0) - (old.get(m) or 0),
+            "Treffer": (old.get(m) or 0) == (computed.get(m) or 0),
+        }
+        for m in months
+    ]
+    return pd.DataFrame(rows)
 
 
 def _timeline_frame(item: Item, decision: Decision, stichtag: Month, full: bool) -> pd.DataFrame:
@@ -394,6 +414,27 @@ def main() -> None:
         for warn in layout.warnings:
             st.warning(warn, icon="⚠️")
 
+        st.divider()
+        st.subheader("Alter FCST (optional)")
+        old_fcst_file = st.file_uploader(
+            "Zum Vergleich hochladen",
+            type=["xlsx", "xlsm"],
+            key="old_fcst_upload",
+            help="ItemNumber + Monatsspalten (JJJJ_MM), z.B. der Export eines früheren Laufs. "
+            "Überschreibt je Artikel einen evtl. bereits in der Hauptdatei enthaltenen FCST.",
+        )
+
+    old_fcst: dict[str, dict[Month, float]] = dict(manual)
+    if old_fcst_file is not None:
+        try:
+            uploaded_old, old_warnings = read_old_fcst_table(io.BytesIO(old_fcst_file.getvalue()))
+        except Exception as exc:  # Datei-/Layoutfehler dem Nutzer zeigen, nicht als Traceback
+            st.error(f"Alter FCST konnte nicht gelesen werden: {exc}")
+            uploaded_old, old_warnings = {}, []
+        for warn in old_warnings:
+            st.warning(warn, icon="⚠️")
+        old_fcst.update({number: series for number, series in uploaded_old.items() if series})
+
     try:
         stichtag = Month.parse(stichtag_label)
     except ValueError as exc:
@@ -449,14 +490,15 @@ def main() -> None:
             column_config={"Abw. zu Demand": st.column_config.NumberColumn(format="percent")},
         )
 
-        if any(manual.values()):
-            st.subheader("Vergleich mit dem manuellen FCST in der Datei")
+        if any(old_fcst.values()):
+            st.subheader("Vergleich mit altem FCST")
             rows = []
             for item in items:
-                verdict, diffs = compare_with_manual(decisions[item.item_number], manual.get(item.item_number, {}))
+                verdict, diffs = compare_with_manual(decisions[item.item_number], old_fcst.get(item.item_number, {}))
                 if verdict != "kein manueller FCST":
                     rows.append({"ItemNumber": item.item_number, "Ergebnis": verdict, "Abweichungen": diffs})
             st.dataframe(pd.DataFrame(rows), width="stretch")
+            st.caption("Zeile-für-Zeile je Monat: Reiter Artikel-Detail.")
 
     with tab_matrix:
         st.subheader(f"FCST je Artikel und Monat ({cfg.horizon_months} Monate ab {stichtag})")
@@ -503,6 +545,16 @@ def main() -> None:
         else:
             st.caption("Für diesen Artikel wird kein FCST erzeugt — siehe Ast und Warnungen.")
 
+        old_series = old_fcst.get(selected, {})
+        if old_series:
+            st.subheader("Vergleich mit altem FCST")
+            st.dataframe(
+                _old_vs_new_frame(decision, old_series),
+                width="stretch",
+                hide_index=True,
+                column_config={"Treffer": st.column_config.CheckboxColumn(disabled=True)},
+            )
+
         with st.expander("Rohtext der Herleitung (für Copy & Paste)"):
             st.code(decision.explain(), language=None)
 
@@ -519,7 +571,7 @@ def main() -> None:
             "und Warnungen je Artikel."
         )
         buffer = io.BytesIO()
-        write_output(io.BytesIO(raw), buffer, layout, items, decisions, manual)
+        write_output(io.BytesIO(raw), buffer, layout, items, decisions, old_fcst)
         name = source_name or "FCST"
         st.download_button(
             "Excel mit FCST herunterladen",
